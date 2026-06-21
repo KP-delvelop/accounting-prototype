@@ -2,6 +2,7 @@ import { isSupabaseConfigured, supabase } from "./supabaseClient.js";
 
 function mapAccount(row) {
   return {
+    companyId: row.company_id,
     code: row.code,
     nameLao: row.name_lao,
     nameEn: row.name_en,
@@ -16,6 +17,7 @@ function mapAccount(row) {
 
 function mapJournalEntry(row, lines) {
   return {
+    companyId: row.company_id,
     id: row.entry_no,
     date: row.entry_date,
     description: row.description ?? "",
@@ -37,9 +39,37 @@ export async function loadAccountingWorkspace() {
     return { configured: false };
   }
 
+  const { data: memberships, error: membershipError } = await supabase
+    .from("app_company_members")
+    .select("role, company:app_companies(id,name,base_currency,country_code,fiscal_year_start_month)")
+    .order("created_at", { ascending: true });
+
+  if (membershipError) throw membershipError;
+
+  const activeMembership = memberships?.[0];
+  const company = activeMembership?.company;
+
+  if (!company) {
+    return {
+      configured: true,
+      company: null,
+      role: null,
+      accounts: [],
+      entries: [],
+    };
+  }
+
   const [accountsResult, entriesResult, linesResult] = await Promise.all([
-    supabase.from("accounting_accounts").select("*").order("code", { ascending: true }),
-    supabase.from("accounting_journal_entries").select("*").order("entry_date", { ascending: true }),
+    supabase
+      .from("accounting_accounts")
+      .select("*")
+      .eq("company_id", company.id)
+      .order("code", { ascending: true }),
+    supabase
+      .from("accounting_journal_entries")
+      .select("*")
+      .eq("company_id", company.id)
+      .order("entry_date", { ascending: true }),
     supabase
       .from("accounting_journal_lines")
       .select("entry_no,line_no,account_code,side,amount")
@@ -54,6 +84,14 @@ export async function loadAccountingWorkspace() {
 
   return {
     configured: true,
+    company: {
+      id: company.id,
+      name: company.name,
+      baseCurrency: company.base_currency,
+      countryCode: company.country_code,
+      fiscalYearStartMonth: company.fiscal_year_start_month,
+    },
+    role: activeMembership.role,
     accounts: (accountsResult.data ?? []).map(mapAccount),
     entries: (entriesResult.data ?? []).map((entry) => mapJournalEntry(entry, linesResult.data ?? [])),
   };
@@ -100,8 +138,10 @@ export async function signOut() {
 
 export async function saveJournalEntry(entry) {
   if (!supabase) throw new Error("Supabase is not configured");
+  if (!entry.companyId) throw new Error("No company is selected for this journal entry");
 
   const { error: entryError } = await supabase.from("accounting_journal_entries").upsert({
+    company_id: entry.companyId,
     entry_no: entry.id,
     entry_date: entry.date,
     description: entry.description ?? "",

@@ -148,8 +148,9 @@ function buildTrialRows(accountRows) {
   return Array.from(rows.values()).filter((row) => row.debit > 0 || row.credit > 0);
 }
 
-function draftToEntry(draft, id, status) {
+function draftToEntry(draft, id, status, companyId = null) {
   return {
+    companyId,
     id,
     date: draft.date,
     description: draft.description,
@@ -566,6 +567,8 @@ function App() {
   const [accounts, setAccounts] = useState([]);
   const [entries, setEntries] = useState([]);
   const [draft, setDraft] = useState(blankDraft);
+  const [company, setCompany] = useState(null);
+  const [memberRole, setMemberRole] = useState(null);
   const [dataStatus, setDataStatus] = useState("idle");
   const [dataError, setDataError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -575,7 +578,10 @@ function App() {
   const trialRows = useMemo(() => buildTrialRows(accountRows), [accountRows]);
   const reviewEntries = useMemo(() => entries.filter((entry) => entry.status !== "posted"), [entries]);
   const recentEntries = useMemo(() => [...entries].sort((a, b) => b.date.localeCompare(a.date)), [entries]);
-  const draftAnalysis = useMemo(() => analyzeEntry(draftToEntry(draft, "DRAFT", "review"), accountsByCode), [draft, accountsByCode]);
+  const draftAnalysis = useMemo(
+    () => analyzeEntry(draftToEntry(draft, "DRAFT", "review", company?.id), accountsByCode),
+    [draft, accountsByCode, company?.id],
+  );
 
   const totals = useMemo(() => {
     const category = accountRows.reduce(
@@ -635,6 +641,8 @@ function App() {
       try {
         const workspace = await loadAccountingWorkspace();
         if (!mounted) return;
+        setCompany(workspace.company ?? null);
+        setMemberRole(workspace.role ?? null);
         setAccounts(workspace.accounts ?? []);
         setEntries(workspace.entries ?? []);
         setDataStatus("supabase");
@@ -677,11 +685,19 @@ function App() {
     setSession(null);
     setAccounts([]);
     setEntries([]);
+    setCompany(null);
+    setMemberRole(null);
     setActivePage("dashboard");
   }
 
   async function commitDraft(status) {
-    const entry = draftToEntry(draft, nextJournalId(entries), status);
+    if (!company?.id) {
+      setDataStatus("error");
+      setDataError("Your account is not connected to a company workspace yet.");
+      return;
+    }
+
+    const entry = draftToEntry(draft, nextJournalId(entries), status, company.id);
     setIsSaving(true);
     try {
       await saveJournalEntry(entry);
@@ -727,7 +743,7 @@ function App() {
         <div className="sidebar-footer">
           <div className="avatar">AC</div>
           <div>
-            <strong>Accountant</strong>
+            <strong>{memberRole ? memberRole[0].toUpperCase() + memberRole.slice(1) : "Member"}</strong>
             <span>{session.user.email}</span>
           </div>
         </div>
@@ -736,7 +752,7 @@ function App() {
       <section className="main-workspace">
         <header className="topbar">
           <div>
-            <p>May 2025 - Demo Company</p>
+            <p>May 2025 - {company?.name ?? "No company assigned"}</p>
             <h1>{pageTitles[activePage]}</h1>
           </div>
           <div className="topbar-actions">
