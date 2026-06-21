@@ -72,6 +72,48 @@ function mapAuditEvent(row) {
   };
 }
 
+function mapCustomer(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    name: row.name,
+    email: row.email ?? "",
+    phone: row.phone ?? "",
+    billingAddress: row.billing_address ?? "",
+    status: row.status,
+    createdAt: row.created_at,
+  };
+}
+
+function mapInvoice(row, items = []) {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    customerId: row.customer_id,
+    customerName: row.customer?.name ?? "",
+    invoiceNo: row.invoice_no,
+    issueDate: row.issue_date,
+    dueDate: row.due_date,
+    status: row.status,
+    subtotal: Number(row.subtotal) || 0,
+    taxAmount: Number(row.tax_amount) || 0,
+    totalAmount: Number(row.total_amount) || 0,
+    postedEntryNo: row.posted_entry_no,
+    notes: row.notes ?? "",
+    items: items
+      .filter((item) => item.invoice_id === row.id)
+      .sort((a, b) => a.line_no - b.line_no)
+      .map((item) => ({
+        id: item.id,
+        lineNo: item.line_no,
+        description: item.description,
+        quantity: Number(item.quantity) || 0,
+        unitPrice: Number(item.unit_price) || 0,
+        lineTotal: Number(item.line_total) || 0,
+      })),
+  };
+}
+
 export async function loadAccountingWorkspace() {
   if (!isSupabaseConfigured || !supabase) {
     return { configured: false };
@@ -108,12 +150,24 @@ export async function loadAccountingWorkspace() {
       invitations: [],
       auditEvents: [],
       availableInvitations: (availableInvitations ?? []).map(mapInvitation),
+      customers: [],
+      invoices: [],
       accounts: [],
       entries: [],
     };
   }
 
-  const [accountsResult, entriesResult, linesResult, teamResult, invitationsResult, auditResult] = await Promise.all([
+  const [
+    accountsResult,
+    entriesResult,
+    linesResult,
+    teamResult,
+    invitationsResult,
+    auditResult,
+    customersResult,
+    invoicesResult,
+    invoiceItemsResult,
+  ] = await Promise.all([
     supabase
       .from("accounting_accounts")
       .select("*")
@@ -146,9 +200,32 @@ export async function loadAccountingWorkspace() {
       .eq("company_id", company.id)
       .order("created_at", { ascending: false })
       .limit(50),
+    supabase
+      .from("sales_customers")
+      .select("id,company_id,name,email,phone,billing_address,status,created_at")
+      .eq("company_id", company.id)
+      .order("name", { ascending: true }),
+    supabase
+      .from("sales_invoices")
+      .select("id,company_id,customer_id,invoice_no,issue_date,due_date,status,subtotal,tax_amount,total_amount,posted_entry_no,notes,customer:sales_customers(name)")
+      .eq("company_id", company.id)
+      .order("issue_date", { ascending: false }),
+    supabase
+      .from("sales_invoice_items")
+      .select("id,invoice_id,line_no,description,quantity,unit_price,line_total")
+      .order("line_no", { ascending: true }),
   ]);
 
-  const error = accountsResult.error ?? entriesResult.error ?? linesResult.error ?? teamResult.error ?? invitationsResult.error ?? auditResult.error;
+  const error =
+    accountsResult.error ??
+    entriesResult.error ??
+    linesResult.error ??
+    teamResult.error ??
+    invitationsResult.error ??
+    auditResult.error ??
+    customersResult.error ??
+    invoicesResult.error ??
+    invoiceItemsResult.error;
   if (error) {
     throw error;
   }
@@ -177,6 +254,8 @@ export async function loadAccountingWorkspace() {
     invitations: (invitationsResult.data ?? []).map(mapInvitation),
     auditEvents: (auditResult.data ?? []).map(mapAuditEvent),
     availableInvitations: [],
+    customers: (customersResult.data ?? []).map(mapCustomer),
+    invoices: (invoicesResult.data ?? []).map((invoice) => mapInvoice(invoice, invoiceItemsResult.data ?? [])),
     accounts: (accountsResult.data ?? []).map(mapAccount),
     entries: (entriesResult.data ?? []).map((entry) => mapJournalEntry(entry, linesResult.data ?? [])),
   };
@@ -389,4 +468,83 @@ export async function removeCompanyMember(memberId) {
     .eq("id", memberId);
 
   if (error) throw error;
+}
+
+export async function saveCustomer(customer) {
+  if (!supabase) throw new Error("Supabase is not configured");
+  if (!customer.companyId) throw new Error("No company is selected for this customer");
+
+  const payload = {
+    company_id: customer.companyId,
+    name: customer.name,
+    email: customer.email || null,
+    phone: customer.phone || null,
+    billing_address: customer.billingAddress || null,
+    status: customer.status ?? "active",
+    updated_at: new Date().toISOString(),
+  };
+
+  const query = customer.id
+    ? supabase.from("sales_customers").update(payload).eq("id", customer.id)
+    : supabase.from("sales_customers").insert(payload);
+
+  const { data, error } = await query
+    .select("id,company_id,name,email,phone,billing_address,status,created_at")
+    .single();
+
+  if (error) throw error;
+  return mapCustomer(data);
+}
+
+export async function saveInvoice(invoice) {
+  if (!supabase) throw new Error("Supabase is not configured");
+  if (!invoice.companyId) throw new Error("No company is selected for this invoice");
+
+  const rpcItems = invoice.items.map((item) => ({
+    description: item.description,
+    quantity: Number(item.quantity) || 0,
+    unitPrice: Number(item.unitPrice) || 0,
+  }));
+
+  const { data: invoiceId, error: rpcError } = await supabase.rpc("save_sales_invoice", {
+    target_invoice_id: invoice.id ?? null,
+    target_company_id: invoice.companyId,
+    target_customer_id: invoice.customerId,
+    target_invoice_no: invoice.invoiceNo,
+    target_issue_date: invoice.issueDate,
+    target_due_date: invoice.dueDate,
+    target_tax_amount: Number(invoice.taxAmount) || 0,
+    target_notes: invoice.notes ?? "",
+    target_items: rpcItems,
+  });
+
+  if (rpcError) throw rpcError;
+
+  const { data: invoiceRow, error: invoiceError } = await supabase
+    .from("sales_invoices")
+    .select("id,company_id,customer_id,invoice_no,issue_date,due_date,status,subtotal,tax_amount,total_amount,posted_entry_no,notes,customer:sales_customers(name)")
+    .eq("id", invoiceId)
+    .single();
+
+  if (invoiceError) throw invoiceError;
+
+  const { data: itemRows, error: itemError } = await supabase
+    .from("sales_invoice_items")
+    .select("id,invoice_id,line_no,description,quantity,unit_price,line_total")
+    .eq("invoice_id", invoiceRow.id)
+    .order("line_no", { ascending: true });
+
+  if (itemError) throw itemError;
+  return mapInvoice(invoiceRow, itemRows ?? []);
+}
+
+export async function postInvoice(invoiceId) {
+  if (!supabase) throw new Error("Supabase is not configured");
+
+  const { data, error } = await supabase.rpc("post_sales_invoice", {
+    target_invoice_id: invoiceId,
+  });
+
+  if (error) throw error;
+  return data;
 }

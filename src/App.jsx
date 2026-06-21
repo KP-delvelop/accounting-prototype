@@ -5,6 +5,7 @@ import {
   Building2,
   CheckCircle2,
   FileSpreadsheet,
+  FileText,
   History,
   Landmark,
   LayoutDashboard,
@@ -32,7 +33,10 @@ import {
   onAuthChange,
   removeCompanyMember,
   saveAccount,
+  saveCustomer,
+  saveInvoice,
   saveJournalEntry,
+  postInvoice,
   signInWithEmail,
   signOut,
   signUpWithEmail,
@@ -43,6 +47,7 @@ import {
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "journal", label: "Journal", icon: ReceiptText },
+  { id: "sales", label: "Sales", icon: FileText },
   { id: "accounts", label: "Chart of Accounts", icon: Table2 },
   { id: "trial", label: "Trial Balance", icon: Scale },
   { id: "reports", label: "Reports", icon: FileSpreadsheet },
@@ -63,6 +68,7 @@ const blankDraft = {
 const pageTitles = {
   dashboard: "Dashboard",
   journal: "Journal",
+  sales: "Sales",
   accounts: "Chart of Accounts",
   trial: "Trial Balance",
   reports: "Reports",
@@ -88,6 +94,32 @@ const blankMemberInvite = {
   email: "",
   role: "viewer",
 };
+
+const blankCustomer = {
+  name: "",
+  email: "",
+  phone: "",
+  billingAddress: "",
+  status: "active",
+};
+
+const blankInvoiceItem = {
+  description: "Monthly service",
+  quantity: 1,
+  unitPrice: 9800000,
+};
+
+function blankInvoice(customers = [], invoices = []) {
+  return {
+    invoiceNo: nextInvoiceNo(invoices),
+    customerId: customers[0]?.id ?? "",
+    issueDate: "2025-05-31",
+    dueDate: "2025-06-30",
+    taxAmount: 0,
+    notes: "",
+    items: [{ ...blankInvoiceItem }],
+  };
+}
 
 function formatKip(value) {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(Math.round(Number(value) || 0));
@@ -202,6 +234,25 @@ function draftToEntry(draft, id, status, companyId = null) {
 
 function nextJournalId(entries) {
   return `JV-2025-${String(entries.length + 1).padStart(4, "0")}`;
+}
+
+function nextInvoiceNo(invoices) {
+  const maxNumber = invoices.reduce((max, invoice) => {
+    const match = invoice.invoiceNo?.match(/(\d+)$/);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  return `INV-2025-${String(maxNumber + 1).padStart(4, "0")}`;
+}
+
+function invoiceSubtotal(invoice) {
+  return invoice.items.reduce(
+    (sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
+    0,
+  );
+}
+
+function invoiceTotal(invoice) {
+  return invoiceSubtotal(invoice) + (Number(invoice.taxAmount) || 0);
 }
 
 function StatusPill({ tone = "neutral", children }) {
@@ -582,6 +633,233 @@ function JournalPage({
   );
 }
 
+function SalesPage({
+  customers,
+  invoices,
+  customerDraft,
+  setCustomerDraft,
+  invoiceDraft,
+  setInvoiceDraft,
+  salesStatus,
+  saveCustomerDraft,
+  saveInvoiceDraft,
+  postInvoiceDraft,
+  canEdit,
+  isSaving,
+}) {
+  function updateCustomer(field, value) {
+    setCustomerDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateInvoice(field, value) {
+    setInvoiceDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateInvoiceItem(index, field, value) {
+    setInvoiceDraft((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: value } : item)),
+    }));
+  }
+
+  function addInvoiceLine() {
+    setInvoiceDraft((current) => ({
+      ...current,
+      items: [...current.items, { description: "", quantity: 1, unitPrice: 0 }],
+    }));
+  }
+
+  function removeInvoiceLine(index) {
+    setInvoiceDraft((current) => ({
+      ...current,
+      items: current.items.filter((_, itemIndex) => itemIndex !== index),
+    }));
+  }
+
+  function invoiceStatusTone(status) {
+    if (status === "sent" || status === "paid") return "success";
+    if (status === "draft") return "warning";
+    return "neutral";
+  }
+
+  const subtotal = invoiceSubtotal(invoiceDraft);
+  const total = invoiceTotal(invoiceDraft);
+
+  return (
+    <div className="page-grid sales-grid">
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Add customer</h2>
+            <p>{canEdit ? "Create billing profiles for sales invoices." : "Your role has read-only sales access."}</p>
+          </div>
+        </div>
+        <div className="entry-form">
+          <label className="span-2">
+            Customer name
+            <input value={customerDraft.name} onChange={(event) => updateCustomer("name", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Email
+            <input type="email" value={customerDraft.email} onChange={(event) => updateCustomer("email", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Phone
+            <input value={customerDraft.phone} onChange={(event) => updateCustomer("phone", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Billing address
+            <textarea value={customerDraft.billingAddress} onChange={(event) => updateCustomer("billingAddress", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Status
+            <select value={customerDraft.status} onChange={(event) => updateCustomer("status", event.target.value)} disabled={!canEdit}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </label>
+        </div>
+        <div className="form-actions">
+          <button className="primary-button" onClick={saveCustomerDraft} disabled={!canEdit || isSaving}>
+            Save customer
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Draft invoice</h2>
+            <p>Posting creates accounts receivable and revenue journal lines.</p>
+          </div>
+          <StatusPill tone={subtotal > 0 ? "success" : "warning"}>{money(total)}</StatusPill>
+        </div>
+        <div className="entry-form">
+          <label>
+            Invoice number
+            <input value={invoiceDraft.invoiceNo} onChange={(event) => updateInvoice("invoiceNo", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Customer
+            <select value={invoiceDraft.customerId} onChange={(event) => updateInvoice("customerId", event.target.value)} disabled={!canEdit || !customers.length}>
+              <option value="">Select customer</option>
+              {customers
+                .filter((customer) => customer.status === "active")
+                .map((customer) => (
+                  <option key={customer.id} value={customer.id}>{customer.name}</option>
+                ))}
+            </select>
+          </label>
+          <label>
+            Issue date
+            <input type="date" value={invoiceDraft.issueDate} onChange={(event) => updateInvoice("issueDate", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Due date
+            <input type="date" value={invoiceDraft.dueDate} onChange={(event) => updateInvoice("dueDate", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Tax amount
+            <input type="number" min="0" value={invoiceDraft.taxAmount} onChange={(event) => updateInvoice("taxAmount", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Notes
+            <textarea value={invoiceDraft.notes} onChange={(event) => updateInvoice("notes", event.target.value)} disabled={!canEdit} />
+          </label>
+        </div>
+
+        <div className="line-items">
+          {invoiceDraft.items.map((item, index) => (
+            <div className="invoice-line-grid" key={index}>
+              <label>
+                Description
+                <input value={item.description} onChange={(event) => updateInvoiceItem(index, "description", event.target.value)} disabled={!canEdit} />
+              </label>
+              <label>
+                Quantity
+                <input type="number" min="0.01" step="0.01" value={item.quantity} onChange={(event) => updateInvoiceItem(index, "quantity", event.target.value)} disabled={!canEdit} />
+              </label>
+              <label>
+                Unit price
+                <input type="number" min="0" value={item.unitPrice} onChange={(event) => updateInvoiceItem(index, "unitPrice", event.target.value)} disabled={!canEdit} />
+              </label>
+              <div className="line-total">
+                <span>Line total</span>
+                <strong>{money((Number(item.quantity) || 0) * (Number(item.unitPrice) || 0))}</strong>
+              </div>
+              <button className="text-button icon-button danger" onClick={() => removeInvoiceLine(index)} disabled={!canEdit || invoiceDraft.items.length === 1} title="Remove line">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="sales-totals">
+          <span>Subtotal {money(subtotal)}</span>
+          <strong>Total {money(total)}</strong>
+        </div>
+
+        {salesStatus && <p className="notice">{salesStatus}</p>}
+        <div className="form-actions">
+          <button className="secondary-button" onClick={addInvoiceLine} disabled={!canEdit || isSaving}>
+            <Plus size={17} />
+            Add line
+          </button>
+          <button className="primary-button" onClick={saveInvoiceDraft} disabled={!canEdit || isSaving || !customers.length}>
+            Save invoice
+          </button>
+        </div>
+      </section>
+
+      <section className="panel full-page-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Sales invoices</h2>
+            <p>{invoices.length} invoices from Supabase</p>
+          </div>
+        </div>
+        <DataTable
+          columns={["Invoice", "Customer", "Total", "Status", "Actions", "Issue", "Due", "Ledger"]}
+          rows={invoices.map((invoice) => [
+            invoice.invoiceNo,
+            invoice.customerName || "Unknown customer",
+            money(invoice.totalAmount),
+            <StatusPill tone={invoiceStatusTone(invoice.status)} key={`${invoice.id}-status`}>{invoice.status}</StatusPill>,
+            <span className="table-actions" key={`${invoice.id}-actions`}>
+              <button className="text-button" onClick={() => postInvoiceDraft(invoice)} disabled={!canEdit || isSaving || invoice.status !== "draft"}>
+                Post
+              </button>
+            </span>,
+            invoice.issueDate,
+            invoice.dueDate,
+            invoice.postedEntryNo || "Not posted",
+          ])}
+          empty="No sales invoices"
+        />
+      </section>
+
+      <section className="panel full-page-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Customers</h2>
+            <p>{customers.length} billing profiles</p>
+          </div>
+        </div>
+        <DataTable
+          columns={["Name", "Email", "Phone", "Status"]}
+          rows={customers.map((customer) => [
+            customer.name,
+            customer.email || "No email",
+            customer.phone || "No phone",
+            <StatusPill tone={customer.status === "active" ? "success" : "neutral"} key={customer.id}>{customer.status}</StatusPill>,
+          ])}
+          empty="No customers"
+        />
+      </section>
+    </div>
+  );
+}
+
 function AccountsPage({
   accountRows,
   accountDraft,
@@ -928,7 +1206,12 @@ function App() {
   const [teamMembers, setTeamMembers] = useState([]);
   const [invitations, setInvitations] = useState([]);
   const [auditEvents, setAuditEvents] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [invoices, setInvoices] = useState([]);
   const [availableInvitations, setAvailableInvitations] = useState([]);
+  const [customerDraft, setCustomerDraft] = useState(blankCustomer);
+  const [invoiceDraft, setInvoiceDraft] = useState(() => blankInvoice());
+  const [salesStatus, setSalesStatus] = useState("");
   const [inviteDraft, setInviteDraft] = useState(blankMemberInvite);
   const [teamStatus, setTeamStatus] = useState("");
   const [companyNameDraft, setCompanyNameDraft] = useState("Rabbitwork Company");
@@ -983,14 +1266,24 @@ function App() {
   ];
 
   function applyWorkspace(workspace) {
+    const nextCustomers = workspace.customers ?? [];
+    const nextInvoices = workspace.invoices ?? [];
+
     setCompany(workspace.company ?? null);
     setMemberRole(workspace.role ?? null);
     setTeamMembers(workspace.teamMembers ?? []);
     setInvitations(workspace.invitations ?? []);
     setAuditEvents(workspace.auditEvents ?? []);
+    setCustomers(nextCustomers);
+    setInvoices(nextInvoices);
     setAvailableInvitations(workspace.availableInvitations ?? []);
     setAccounts(workspace.accounts ?? []);
     setEntries(workspace.entries ?? []);
+    setInvoiceDraft((current) => {
+      const firstCustomerId = nextCustomers.find((customer) => customer.status === "active")?.id ?? "";
+      if (current.invoiceNo === nextInvoiceNo([]) && !current.customerId) return blankInvoice(nextCustomers, nextInvoices);
+      return { ...current, customerId: current.customerId || firstCustomerId };
+    });
     setDataStatus("supabase");
   }
 
@@ -1064,6 +1357,8 @@ function App() {
     setTeamMembers([]);
     setInvitations([]);
     setAuditEvents([]);
+    setCustomers([]);
+    setInvoices([]);
     setAvailableInvitations([]);
     setCompany(null);
     setMemberRole(null);
@@ -1071,6 +1366,9 @@ function App() {
     setEditingEntryId(null);
     setAccountDraft(blankAccount);
     setEditingAccountCode(null);
+    setCustomerDraft(blankCustomer);
+    setInvoiceDraft(blankInvoice());
+    setSalesStatus("");
     setInviteDraft(blankMemberInvite);
     setActivePage("dashboard");
   }
@@ -1196,6 +1494,110 @@ function App() {
       if (editingAccountCode === account.code) cancelAccountEdit();
     } catch (error) {
       setAccountStatus(error?.message ?? "Could not delete account. Accounts used by journal lines are protected.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleSaveCustomerDraft() {
+    if (!company?.id) return;
+    if (!customerDraft.name.trim()) {
+      setSalesStatus("Customer name is required.");
+      return;
+    }
+
+    const nextCustomer = {
+      ...customerDraft,
+      companyId: company.id,
+      name: customerDraft.name.trim(),
+      email: customerDraft.email.trim(),
+      phone: customerDraft.phone.trim(),
+      billingAddress: customerDraft.billingAddress.trim(),
+    };
+
+    setIsSaving(true);
+    setSalesStatus("");
+    try {
+      const savedCustomer = await saveCustomer(nextCustomer);
+      const nextCustomers = [
+        savedCustomer,
+        ...customers.filter((customer) => customer.id !== savedCustomer.id),
+      ].sort((a, b) => a.name.localeCompare(b.name));
+      setCustomers(nextCustomers);
+      setCustomerDraft(blankCustomer);
+      setInvoiceDraft((current) => ({ ...current, customerId: current.customerId || savedCustomer.id }));
+      setSalesStatus("Customer saved.");
+    } catch (error) {
+      setSalesStatus(error?.message ?? "Could not save customer.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleSaveInvoiceDraft() {
+    if (!company?.id) return;
+    const trimmedItems = invoiceDraft.items.map((item) => ({
+      description: item.description.trim(),
+      quantity: Number(item.quantity) || 0,
+      unitPrice: Number(item.unitPrice) || 0,
+    }));
+
+    if (!invoiceDraft.invoiceNo.trim() || !invoiceDraft.customerId) {
+      setSalesStatus("Invoice number and customer are required.");
+      return;
+    }
+
+    if (!invoiceDraft.issueDate || !invoiceDraft.dueDate || invoiceDraft.dueDate < invoiceDraft.issueDate) {
+      setSalesStatus("Invoice dates are invalid.");
+      return;
+    }
+
+    if (!trimmedItems.length || trimmedItems.some((item) => !item.description || item.quantity <= 0 || item.unitPrice < 0)) {
+      setSalesStatus("Every invoice line needs a description, positive quantity, and non-negative unit price.");
+      return;
+    }
+
+    const nextInvoice = {
+      ...invoiceDraft,
+      companyId: company.id,
+      invoiceNo: invoiceDraft.invoiceNo.trim(),
+      items: trimmedItems,
+      taxAmount: Number(invoiceDraft.taxAmount) || 0,
+    };
+
+    if (invoiceSubtotal(nextInvoice) <= 0) {
+      setSalesStatus("Invoice subtotal must be greater than zero.");
+      return;
+    }
+
+    setIsSaving(true);
+    setSalesStatus("");
+    try {
+      const savedInvoice = await saveInvoice(nextInvoice);
+      const nextInvoices = [
+        savedInvoice,
+        ...invoices.filter((invoice) => invoice.id !== savedInvoice.id),
+      ].sort((a, b) => b.issueDate.localeCompare(a.issueDate));
+      setInvoices(nextInvoices);
+      setInvoiceDraft(blankInvoice(customers, nextInvoices));
+      setSalesStatus("Invoice saved as draft.");
+    } catch (error) {
+      setSalesStatus(error?.message ?? "Could not save invoice.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handlePostInvoiceDraft(invoice) {
+    setIsSaving(true);
+    setSalesStatus("");
+    try {
+      const postedEntryNo = await postInvoice(invoice.id);
+      const workspace = await loadAccountingWorkspace();
+      applyWorkspace(workspace);
+      setSalesStatus(`Invoice posted to ${postedEntryNo}.`);
+    } catch (error) {
+      setSalesStatus(error?.message ?? "Could not post invoice.");
     } finally {
       setIsSaving(false);
     }
@@ -1410,6 +1812,22 @@ function App() {
                 cancelEdit={cancelEntryEdit}
                 startEditEntry={startEditEntry}
                 voidEntry={handleVoidEntry}
+              />
+            )}
+            {activePage === "sales" && (
+              <SalesPage
+                customers={customers}
+                invoices={invoices}
+                customerDraft={customerDraft}
+                setCustomerDraft={setCustomerDraft}
+                invoiceDraft={invoiceDraft}
+                setInvoiceDraft={setInvoiceDraft}
+                salesStatus={salesStatus}
+                saveCustomerDraft={handleSaveCustomerDraft}
+                saveInvoiceDraft={handleSaveInvoiceDraft}
+                postInvoiceDraft={handlePostInvoiceDraft}
+                canEdit={userCanManageAccounting}
+                isSaving={isSaving}
               />
             )}
             {activePage === "accounts" && (
