@@ -75,6 +75,10 @@ button:disabled {
   box-shadow: var(--shadow);
 }
 
+.onboarding-panel {
+  width: min(100%, 560px);
+}
+
 .login-brand {
   display: flex;
   align-items: center;
@@ -225,6 +229,16 @@ textarea:focus {
 .auth-message {
   background: var(--surface-tint);
   color: var(--teal-700);
+}
+
+.onboarding-divider {
+  margin: 18px 0 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-600);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .validation,

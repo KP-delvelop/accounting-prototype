@@ -50,6 +50,7 @@ function mapInvitation(row) {
   return {
     id: row.id,
     companyId: row.company_id,
+    companyName: row.company?.name ?? "",
     email: row.email,
     role: row.role,
     status: row.status,
@@ -78,10 +79,21 @@ export async function loadAccountingWorkspace() {
   const company = activeMembership?.company;
 
   if (!company) {
+    const { data: availableInvitations, error: invitationError } = await supabase
+      .from("app_company_invitations")
+      .select("id,company_id,email,role,status,invited_by,created_at,company:app_companies(id,name)")
+      .eq("status", "pending")
+      .order("created_at", { ascending: false });
+
+    if (invitationError) throw invitationError;
+
     return {
       configured: true,
       company: null,
       role: null,
+      teamMembers: [],
+      invitations: [],
+      availableInvitations: (availableInvitations ?? []).map(mapInvitation),
       accounts: [],
       entries: [],
     };
@@ -110,7 +122,7 @@ export async function loadAccountingWorkspace() {
       .order("created_at", { ascending: true }),
     supabase
       .from("app_company_invitations")
-      .select("id,company_id,email,role,status,invited_by,created_at")
+      .select("id,company_id,email,role,status,invited_by,created_at,company:app_companies(id,name)")
       .eq("company_id", company.id)
       .eq("status", "pending")
       .order("created_at", { ascending: false }),
@@ -143,6 +155,7 @@ export async function loadAccountingWorkspace() {
     role: activeMembership.role,
     teamMembers: teamRows.map((member) => mapTeamMember(member, profilesById.get(member.user_id))),
     invitations: (invitationsResult.data ?? []).map(mapInvitation),
+    availableInvitations: [],
     accounts: (accountsResult.data ?? []).map(mapAccount),
     entries: (entriesResult.data ?? []).map((entry) => mapJournalEntry(entry, linesResult.data ?? [])),
   };
@@ -291,6 +304,45 @@ export async function createCompanyInvitation(companyId, email, role) {
 
   if (error) throw error;
   return mapInvitation(data);
+}
+
+export async function createCompanyForCurrentUser(name) {
+  if (!supabase) throw new Error("Supabase is not configured");
+
+  const { data: userResult, error: userError } = await supabase.auth.getUser();
+  if (userError) throw userError;
+
+  const { data: company, error: companyError } = await supabase
+    .from("app_companies")
+    .insert({ name, base_currency: "LAK", country_code: "LA" })
+    .select("id,name,base_currency,country_code,fiscal_year_start_month")
+    .single();
+
+  if (companyError) throw companyError;
+
+  const { error: memberError } = await supabase.from("app_company_members").insert({
+    company_id: company.id,
+    user_id: userResult.user.id,
+    role: "owner",
+  });
+
+  if (memberError) throw memberError;
+  return company;
+}
+
+export async function acceptCompanyInvitation(invitation) {
+  if (!supabase) throw new Error("Supabase is not configured");
+
+  const { data: userResult, error: userError } = await supabase.auth.getUser();
+  if (userError) throw userError;
+
+  const { error } = await supabase.from("app_company_members").insert({
+    company_id: invitation.companyId,
+    user_id: userResult.user.id,
+    role: invitation.role,
+  });
+
+  if (error) throw error;
 }
 
 export async function updateCompanyMemberRole(memberId, role) {

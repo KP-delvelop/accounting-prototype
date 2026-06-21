@@ -22,7 +22,9 @@ import {
 } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  acceptCompanyInvitation,
   createCompanyInvitation,
+  createCompanyForCurrentUser,
   deleteAccount,
   getCurrentSession,
   loadAccountingWorkspace,
@@ -259,6 +261,63 @@ function LoginGate({ authEmail, authPassword, authStatus, setAuthEmail, setAuthP
           </button>
         </form>
         {authStatus && <p className="auth-message">{authStatus}</p>}
+      </section>
+    </main>
+  );
+}
+
+function OnboardingPage({
+  companyNameDraft,
+  setCompanyNameDraft,
+  invitations,
+  status,
+  isSaving,
+  onCreateCompany,
+  onAcceptInvitation,
+  onSignOut,
+}) {
+  return (
+    <main className="login-page">
+      <section className="login-panel onboarding-panel">
+        <div className="login-brand">
+          <div className="login-mark">
+            <Building2 size={32} />
+          </div>
+          <div>
+            <h1>Set up workspace</h1>
+            <p>Create a company or accept an invitation.</p>
+          </div>
+        </div>
+
+        <div className="login-form">
+          <label>
+            Company name
+            <input value={companyNameDraft} onChange={(event) => setCompanyNameDraft(event.target.value)} placeholder="Rabbitwork Company" />
+          </label>
+          <button className="primary-button wide" onClick={onCreateCompany} disabled={isSaving || !companyNameDraft.trim()}>
+            Create company
+          </button>
+        </div>
+
+        <div className="onboarding-divider">Pending invitations</div>
+        <div className="summary-list">
+          {invitations.length ? (
+            invitations.map((invitation) => (
+              <div className="summary-row" key={invitation.id}>
+                <span>{invitation.companyName || invitation.companyId}</span>
+                <strong>{roleLabel(invitation.role)}</strong>
+                <button className="secondary-button" onClick={() => onAcceptInvitation(invitation)} disabled={isSaving}>
+                  Accept
+                </button>
+              </div>
+            ))
+          ) : (
+            <p className="empty-state">No pending invitations for this email.</p>
+          )}
+        </div>
+
+        {status && <p className="auth-message">{status}</p>}
+        <button className="text-button" onClick={onSignOut}>Sign out</button>
       </section>
     </main>
   );
@@ -836,8 +895,11 @@ function App() {
   const [accountStatus, setAccountStatus] = useState("");
   const [teamMembers, setTeamMembers] = useState([]);
   const [invitations, setInvitations] = useState([]);
+  const [availableInvitations, setAvailableInvitations] = useState([]);
   const [inviteDraft, setInviteDraft] = useState(blankMemberInvite);
   const [teamStatus, setTeamStatus] = useState("");
+  const [companyNameDraft, setCompanyNameDraft] = useState("Rabbitwork Company");
+  const [onboardingStatus, setOnboardingStatus] = useState("");
   const [company, setCompany] = useState(null);
   const [memberRole, setMemberRole] = useState(null);
   const [dataStatus, setDataStatus] = useState("idle");
@@ -887,6 +949,17 @@ function App() {
     { name: "Cash Flow Statement", period: "May 2025", status: "Draft", value: "Pending close" },
   ];
 
+  function applyWorkspace(workspace) {
+    setCompany(workspace.company ?? null);
+    setMemberRole(workspace.role ?? null);
+    setTeamMembers(workspace.teamMembers ?? []);
+    setInvitations(workspace.invitations ?? []);
+    setAvailableInvitations(workspace.availableInvitations ?? []);
+    setAccounts(workspace.accounts ?? []);
+    setEntries(workspace.entries ?? []);
+    setDataStatus("supabase");
+  }
+
   useEffect(() => {
     let mounted = true;
     async function initAuth() {
@@ -914,13 +987,7 @@ function App() {
       try {
         const workspace = await loadAccountingWorkspace();
         if (!mounted) return;
-        setCompany(workspace.company ?? null);
-        setMemberRole(workspace.role ?? null);
-        setTeamMembers(workspace.teamMembers ?? []);
-        setInvitations(workspace.invitations ?? []);
-        setAccounts(workspace.accounts ?? []);
-        setEntries(workspace.entries ?? []);
-        setDataStatus("supabase");
+        applyWorkspace(workspace);
       } catch (error) {
         if (!mounted) return;
         setDataStatus("error");
@@ -962,8 +1029,10 @@ function App() {
     setEntries([]);
     setTeamMembers([]);
     setInvitations([]);
+    setAvailableInvitations([]);
     setCompany(null);
     setMemberRole(null);
+    setOnboardingStatus("");
     setEditingEntryId(null);
     setAccountDraft(blankAccount);
     setEditingAccountCode(null);
@@ -1123,6 +1192,36 @@ function App() {
     }
   }
 
+  async function handleCreateCompany() {
+    setIsSaving(true);
+    setOnboardingStatus("");
+    try {
+      await createCompanyForCurrentUser(companyNameDraft.trim());
+      const workspace = await loadAccountingWorkspace();
+      applyWorkspace(workspace);
+      setOnboardingStatus("Company created.");
+    } catch (error) {
+      setOnboardingStatus(error?.message ?? "Could not create company.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleAcceptInvitation(invitation) {
+    setIsSaving(true);
+    setOnboardingStatus("");
+    try {
+      await acceptCompanyInvitation(invitation);
+      const workspace = await loadAccountingWorkspace();
+      applyWorkspace(workspace);
+      setOnboardingStatus("Invitation accepted.");
+    } catch (error) {
+      setOnboardingStatus(error?.message ?? "Could not accept invitation.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function handleChangeMemberRole(member, role) {
     setIsSaving(true);
     setTeamStatus("");
@@ -1164,6 +1263,34 @@ function App() {
         setAuthPassword={setAuthPassword}
         onSignIn={handleSignIn}
         onSignUp={handleSignUp}
+      />
+    );
+  }
+
+  if (!company && (dataStatus === "idle" || dataStatus === "loading")) {
+    return (
+      <main className="login-page">
+        <section className="login-panel">
+          <div className="loading-panel">
+            <RefreshCcw size={22} />
+            Loading workspace data
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!company) {
+    return (
+      <OnboardingPage
+        companyNameDraft={companyNameDraft}
+        setCompanyNameDraft={setCompanyNameDraft}
+        invitations={availableInvitations}
+        status={dataError || onboardingStatus}
+        isSaving={isSaving}
+        onCreateCompany={handleCreateCompany}
+        onAcceptInvitation={handleAcceptInvitation}
+        onSignOut={handleSignOut}
       />
     );
   }
