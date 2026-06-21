@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { excelSeed } from "./data/excelSeed.js";
+import { loadAccountingWorkspace } from "./lib/accountingData.js";
 
 const STORAGE_KEY = "accounting-prototype-ledger-v2";
 const THEME_STORAGE_KEY = "accounting-prototype-theme-v1";
@@ -772,18 +773,21 @@ function App() {
   const [language, setLanguage] = useState("Lao");
   const [meetingMode, setMeetingMode] = useState(true);
   const [theme, setTheme] = useState(loadTheme);
+  const [accounts, setAccounts] = useState(baseAccounts);
   const [entries, setEntries] = useState(loadLedgerEntries);
   const [draft, setDraft] = useState(blankDraft);
   const [editingEntryId, setEditingEntryId] = useState(null);
   const [accountSearch, setAccountSearch] = useState("");
   const [accountTypeFilter, setAccountTypeFilter] = useState("All");
+  const [dataStatus, setDataStatus] = useState("loading");
+  const [dataError, setDataError] = useState("");
 
   const accountsByCode = useMemo(
-    () => new Map(baseAccounts.map((account) => [account.code, account])),
-    [],
+    () => new Map(accounts.map((account) => [account.code, account])),
+    [accounts],
   );
 
-  const accountRows = useMemo(() => buildAccountRows(baseAccounts, entries), [entries]);
+  const accountRows = useMemo(() => buildAccountRows(accounts, entries), [accounts, entries]);
   const trialRows = useMemo(() => buildTrialRows(accountRows), [accountRows]);
   const postedEntries = useMemo(() => entries.filter((entry) => entry.status === "posted"), [entries]);
 
@@ -939,6 +943,47 @@ function App() {
   ];
 
   useEffect(() => {
+    let isMounted = true;
+
+    async function loadWorkspace() {
+      try {
+        const workspace = await loadAccountingWorkspace();
+        if (!isMounted) return;
+
+        if (!workspace.configured) {
+          setDataStatus("local");
+          return;
+        }
+
+        if (workspace.accounts?.length) {
+          setAccounts(workspace.accounts);
+        }
+        if (workspace.entries?.length) {
+          setEntries(workspace.entries);
+          window.localStorage.setItem(
+            STORAGE_KEY,
+            JSON.stringify({
+              version: 2,
+              entries: workspace.entries,
+            }),
+          );
+        }
+        setDataStatus("supabase");
+      } catch (error) {
+        if (!isMounted) return;
+        setDataError(error?.message ?? "Could not load Supabase data");
+        setDataStatus("error");
+      }
+    }
+
+    loadWorkspace();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -1000,9 +1045,11 @@ function App() {
   }
 
   function resetDemoData() {
+    setAccounts(baseAccounts);
     setEntries(initialJournalEntries);
     resetDraft();
     window.localStorage.removeItem(STORAGE_KEY);
+    setDataStatus("local");
   }
 
   function exportWorkspace() {
@@ -1145,6 +1192,12 @@ function App() {
             <p className="section-label">{heroCopy.label}</p>
             <h1>{heroCopy.title}</h1>
             <p>{text.heroSummary({ entries: entries.length, reviewRows: reviewRows.length, balanced: isLedgerBalanced })}</p>
+            <small className={dataStatus === "error" ? "data-source warning" : "data-source"}>
+              {dataStatus === "loading" && "Loading Supabase data"}
+              {dataStatus === "supabase" && "Data source: Supabase"}
+              {dataStatus === "local" && "Data source: local demo"}
+              {dataStatus === "error" && `Supabase fallback: ${dataError}`}
+            </small>
           </div>
           <div className="hero-actions">
             <button className="primary-button" onClick={() => setActiveView("journal")}>
@@ -1377,7 +1430,7 @@ function App() {
                     value={draft.debitAccount}
                     onChange={(event) => updateDraft("debitAccount", event.target.value)}
                   >
-                    {baseAccounts.map((account) => (
+                    {accounts.map((account) => (
                       <option key={account.code} value={account.code}>
                         {getAccountLabel(account, language)}
                       </option>
@@ -1399,7 +1452,7 @@ function App() {
                     value={draft.creditAccount}
                     onChange={(event) => updateDraft("creditAccount", event.target.value)}
                   >
-                    {baseAccounts.map((account) => (
+                    {accounts.map((account) => (
                       <option key={account.code} value={account.code}>
                         {getAccountLabel(account, language)}
                       </option>

@@ -367,6 +367,17 @@ select {
   line-height: 1.55;
 }
 
+.data-source {
+  display: block;
+  margin-top: 10px;
+  color: var(--teal-700);
+  font-weight: 800;
+}
+
+.data-source.warning {
+  color: var(--amber-700);
+}
+
 .hero-actions {
   display: flex;
   gap: 10px;
