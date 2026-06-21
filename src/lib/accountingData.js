@@ -59,6 +59,19 @@ function mapInvitation(row) {
   };
 }
 
+function mapAuditEvent(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    actorUserId: row.actor_user_id,
+    action: row.action,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    details: row.details ?? {},
+    createdAt: row.created_at,
+  };
+}
+
 export async function loadAccountingWorkspace() {
   if (!isSupabaseConfigured || !supabase) {
     return { configured: false };
@@ -93,13 +106,14 @@ export async function loadAccountingWorkspace() {
       role: null,
       teamMembers: [],
       invitations: [],
+      auditEvents: [],
       availableInvitations: (availableInvitations ?? []).map(mapInvitation),
       accounts: [],
       entries: [],
     };
   }
 
-  const [accountsResult, entriesResult, linesResult, teamResult, invitationsResult] = await Promise.all([
+  const [accountsResult, entriesResult, linesResult, teamResult, invitationsResult, auditResult] = await Promise.all([
     supabase
       .from("accounting_accounts")
       .select("*")
@@ -126,9 +140,15 @@ export async function loadAccountingWorkspace() {
       .eq("company_id", company.id)
       .eq("status", "pending")
       .order("created_at", { ascending: false }),
+    supabase
+      .from("app_audit_events")
+      .select("id,company_id,actor_user_id,action,entity_type,entity_id,details,created_at")
+      .eq("company_id", company.id)
+      .order("created_at", { ascending: false })
+      .limit(50),
   ]);
 
-  const error = accountsResult.error ?? entriesResult.error ?? linesResult.error ?? teamResult.error ?? invitationsResult.error;
+  const error = accountsResult.error ?? entriesResult.error ?? linesResult.error ?? teamResult.error ?? invitationsResult.error ?? auditResult.error;
   if (error) {
     throw error;
   }
@@ -155,6 +175,7 @@ export async function loadAccountingWorkspace() {
     role: activeMembership.role,
     teamMembers: teamRows.map((member) => mapTeamMember(member, profilesById.get(member.user_id))),
     invitations: (invitationsResult.data ?? []).map(mapInvitation),
+    auditEvents: (auditResult.data ?? []).map(mapAuditEvent),
     availableInvitations: [],
     accounts: (accountsResult.data ?? []).map(mapAccount),
     entries: (entriesResult.data ?? []).map((entry) => mapJournalEntry(entry, linesResult.data ?? [])),

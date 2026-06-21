@@ -5,6 +5,7 @@ import {
   Building2,
   CheckCircle2,
   FileSpreadsheet,
+  History,
   Landmark,
   LayoutDashboard,
   LogOut,
@@ -46,6 +47,7 @@ const navItems = [
   { id: "trial", label: "Trial Balance", icon: Scale },
   { id: "reports", label: "Reports", icon: FileSpreadsheet },
   { id: "team", label: "Team", icon: Users },
+  { id: "audit", label: "Audit", icon: History },
 ];
 
 const blankDraft = {
@@ -65,6 +67,7 @@ const pageTitles = {
   trial: "Trial Balance",
   reports: "Reports",
   team: "Team",
+  audit: "Audit",
 };
 
 const roleOptions = ["owner", "admin", "accountant", "reviewer", "viewer"];
@@ -857,6 +860,35 @@ function TeamPage({
   );
 }
 
+function AuditPage({ auditEvents, teamMembers }) {
+  const membersById = new Map(teamMembers.map((member) => [member.userId, member]));
+
+  return (
+    <section className="panel full-page-panel">
+      <div className="panel-head">
+        <div>
+          <h2>Audit history</h2>
+          <p>Latest company changes captured by database triggers.</p>
+        </div>
+      </div>
+      <DataTable
+        columns={["Time", "Actor", "Action", "Entity", "Record"]}
+        rows={auditEvents.map((event) => {
+          const actor = membersById.get(event.actorUserId);
+          return [
+            new Date(event.createdAt).toLocaleString(),
+            actor?.email ?? "System",
+            event.action,
+            event.entityType,
+            event.entityId,
+          ];
+        })}
+        empty="No audit events yet"
+      />
+    </section>
+  );
+}
+
 function DataTable({ columns, rows = [], empty = "No data" }) {
   return (
     <div className="data-table">
@@ -895,6 +927,7 @@ function App() {
   const [accountStatus, setAccountStatus] = useState("");
   const [teamMembers, setTeamMembers] = useState([]);
   const [invitations, setInvitations] = useState([]);
+  const [auditEvents, setAuditEvents] = useState([]);
   const [availableInvitations, setAvailableInvitations] = useState([]);
   const [inviteDraft, setInviteDraft] = useState(blankMemberInvite);
   const [teamStatus, setTeamStatus] = useState("");
@@ -954,6 +987,7 @@ function App() {
     setMemberRole(workspace.role ?? null);
     setTeamMembers(workspace.teamMembers ?? []);
     setInvitations(workspace.invitations ?? []);
+    setAuditEvents(workspace.auditEvents ?? []);
     setAvailableInvitations(workspace.availableInvitations ?? []);
     setAccounts(workspace.accounts ?? []);
     setEntries(workspace.entries ?? []);
@@ -1029,6 +1063,7 @@ function App() {
     setEntries([]);
     setTeamMembers([]);
     setInvitations([]);
+    setAuditEvents([]);
     setAvailableInvitations([]);
     setCompany(null);
     setMemberRole(null);
@@ -1409,6 +1444,7 @@ function App() {
                 removeMember={handleRemoveMember}
               />
             )}
+            {activePage === "audit" && <AuditPage auditEvents={auditEvents} teamMembers={teamMembers} />}
           </>
         )}
       </section>
