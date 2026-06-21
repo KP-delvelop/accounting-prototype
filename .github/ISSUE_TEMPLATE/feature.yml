@@ -1,0 +1,29 @@
+name: Feature
+description: Plan a new feature or workflow
+title: "[Feature] "
+labels:
+  - feature
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should the user be able to do?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How do we know this is done?
+      placeholder: |
+        - User can ...
+        - Build passes
+        - Screenshot included
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Design notes, data rules, or related files.
