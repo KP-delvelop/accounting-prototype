@@ -4,6 +4,7 @@ import {
   BarChart3,
   Building2,
   CheckCircle2,
+  ClipboardList,
   FileSpreadsheet,
   FileText,
   History,
@@ -15,6 +16,7 @@ import {
   ReceiptText,
   RefreshCcw,
   Scale,
+  Settings,
   Table2,
   Trash2,
   UserPlus,
@@ -36,7 +38,10 @@ import {
   saveCustomer,
   saveInvoice,
   saveJournalEntry,
+  savePurchaseBill,
+  saveVendor,
   postInvoice,
+  postPurchaseBill,
   signInWithEmail,
   signOut,
   signUpWithEmail,
@@ -48,11 +53,13 @@ const navItems = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
   { id: "journal", label: "Journal", icon: ReceiptText },
   { id: "sales", label: "Sales", icon: FileText },
+  { id: "purchases", label: "Purchases", icon: ClipboardList },
   { id: "accounts", label: "Chart of Accounts", icon: Table2 },
   { id: "trial", label: "Trial Balance", icon: Scale },
   { id: "reports", label: "Reports", icon: FileSpreadsheet },
   { id: "team", label: "Team", icon: Users },
   { id: "audit", label: "Audit", icon: History },
+  { id: "settings", label: "Settings", icon: Settings },
 ];
 
 const blankDraft = {
@@ -69,16 +76,33 @@ const pageTitles = {
   dashboard: "Dashboard",
   journal: "Journal",
   sales: "Sales",
+  purchases: "Purchases",
   accounts: "Chart of Accounts",
   trial: "Trial Balance",
   reports: "Reports",
   team: "Team",
   audit: "Audit",
+  settings: "Settings",
 };
 
 const roleOptions = ["owner", "admin", "accountant", "reviewer", "viewer"];
 const accountTypes = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
 const normalSides = ["debit", "credit"];
+
+const defaultUserSettings = {
+  darkMode: false,
+  compactMode: false,
+  largeText: false,
+};
+
+function loadStoredUserSettings() {
+  try {
+    const stored = window.localStorage.getItem("accounting-user-settings");
+    return stored ? { ...defaultUserSettings, ...JSON.parse(stored) } : defaultUserSettings;
+  } catch {
+    return defaultUserSettings;
+  }
+}
 
 const blankAccount = {
   code: "",
@@ -118,6 +142,35 @@ function blankInvoice(customers = [], invoices = []) {
     taxAmount: 0,
     notes: "",
     items: [{ ...blankInvoiceItem }],
+  };
+}
+
+const blankVendor = {
+  name: "",
+  email: "",
+  phone: "",
+  taxId: "",
+  billingAddress: "",
+  status: "active",
+};
+
+const blankPurchaseBillItem = {
+  accountCode: "6200",
+  description: "Office supplies",
+  quantity: 1,
+  unitCost: 1250000,
+};
+
+function blankPurchaseBill(vendors = [], bills = [], accounts = []) {
+  const defaultAccount = accounts.find((account) => account.type === "Expense")?.code ?? blankPurchaseBillItem.accountCode;
+  return {
+    billNo: nextBillNo(bills),
+    vendorId: vendors[0]?.id ?? "",
+    billDate: "2025-05-31",
+    dueDate: "2025-06-30",
+    taxAmount: 0,
+    notes: "",
+    items: [{ ...blankPurchaseBillItem, accountCode: defaultAccount }],
   };
 }
 
@@ -244,6 +297,14 @@ function nextInvoiceNo(invoices) {
   return `INV-2025-${String(maxNumber + 1).padStart(4, "0")}`;
 }
 
+function nextBillNo(bills) {
+  const maxNumber = bills.reduce((max, bill) => {
+    const match = bill.billNo?.match(/(\d+)$/);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  return `BILL-2025-${String(maxNumber + 1).padStart(4, "0")}`;
+}
+
 function invoiceSubtotal(invoice) {
   return invoice.items.reduce(
     (sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
@@ -253,6 +314,17 @@ function invoiceSubtotal(invoice) {
 
 function invoiceTotal(invoice) {
   return invoiceSubtotal(invoice) + (Number(invoice.taxAmount) || 0);
+}
+
+function billSubtotal(bill) {
+  return bill.items.reduce(
+    (sum, item) => sum + (Number(item.quantity) || 0) * (Number(item.unitCost) || 0),
+    0,
+  );
+}
+
+function billTotal(bill) {
+  return billSubtotal(bill) + (Number(bill.taxAmount) || 0);
 }
 
 function StatusPill({ tone = "neutral", children }) {
@@ -860,6 +932,248 @@ function SalesPage({
   );
 }
 
+function PurchasesPage({
+  accounts,
+  vendors,
+  bills,
+  vendorDraft,
+  setVendorDraft,
+  billDraft,
+  setBillDraft,
+  purchaseStatus,
+  saveVendorDraft,
+  saveBillDraft,
+  postBillDraft,
+  canEdit,
+  isSaving,
+}) {
+  const purchaseAccounts = accounts.filter((account) => ["Expense", "Asset"].includes(account.type));
+
+  function updateVendor(field, value) {
+    setVendorDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateBill(field, value) {
+    setBillDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateBillItem(index, field, value) {
+    setBillDraft((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: value } : item)),
+    }));
+  }
+
+  function addBillLine() {
+    setBillDraft((current) => ({
+      ...current,
+      items: [...current.items, { accountCode: purchaseAccounts[0]?.code ?? "6200", description: "", quantity: 1, unitCost: 0 }],
+    }));
+  }
+
+  function removeBillLine(index) {
+    setBillDraft((current) => ({
+      ...current,
+      items: current.items.filter((_, itemIndex) => itemIndex !== index),
+    }));
+  }
+
+  function billStatusTone(status) {
+    if (status === "approved" || status === "paid") return "success";
+    if (status === "draft") return "warning";
+    return "neutral";
+  }
+
+  const subtotal = billSubtotal(billDraft);
+  const total = billTotal(billDraft);
+
+  return (
+    <div className="page-grid sales-grid">
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Add vendor</h2>
+            <p>{canEdit ? "Create supplier profiles for purchase bills." : "Your role has read-only purchase access."}</p>
+          </div>
+        </div>
+        <div className="entry-form">
+          <label className="span-2">
+            Vendor name
+            <input value={vendorDraft.name} onChange={(event) => updateVendor("name", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Email
+            <input type="email" value={vendorDraft.email} onChange={(event) => updateVendor("email", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Phone
+            <input value={vendorDraft.phone} onChange={(event) => updateVendor("phone", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Tax ID
+            <input value={vendorDraft.taxId} onChange={(event) => updateVendor("taxId", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Billing address
+            <textarea value={vendorDraft.billingAddress} onChange={(event) => updateVendor("billingAddress", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Status
+            <select value={vendorDraft.status} onChange={(event) => updateVendor("status", event.target.value)} disabled={!canEdit}>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+          </label>
+        </div>
+        <div className="form-actions">
+          <button className="primary-button" onClick={saveVendorDraft} disabled={!canEdit || isSaving}>
+            Save vendor
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Draft bill</h2>
+            <p>Posting creates expense, input tax, and accounts payable lines.</p>
+          </div>
+          <StatusPill tone={subtotal > 0 ? "success" : "warning"}>{money(total)}</StatusPill>
+        </div>
+        <div className="entry-form">
+          <label>
+            Bill number
+            <input value={billDraft.billNo} onChange={(event) => updateBill("billNo", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Vendor
+            <select value={billDraft.vendorId} onChange={(event) => updateBill("vendorId", event.target.value)} disabled={!canEdit || !vendors.length}>
+              <option value="">Select vendor</option>
+              {vendors
+                .filter((vendor) => vendor.status === "active")
+                .map((vendor) => (
+                  <option key={vendor.id} value={vendor.id}>{vendor.name}</option>
+                ))}
+            </select>
+          </label>
+          <label>
+            Bill date
+            <input type="date" value={billDraft.billDate} onChange={(event) => updateBill("billDate", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Due date
+            <input type="date" value={billDraft.dueDate} onChange={(event) => updateBill("dueDate", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Tax amount
+            <input type="number" min="0" value={billDraft.taxAmount} onChange={(event) => updateBill("taxAmount", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label className="span-2">
+            Notes
+            <textarea value={billDraft.notes} onChange={(event) => updateBill("notes", event.target.value)} disabled={!canEdit} />
+          </label>
+        </div>
+
+        <div className="line-items">
+          {billDraft.items.map((item, index) => (
+            <div className="invoice-line-grid purchase-line-grid" key={index}>
+              <label>
+                Account
+                <select value={item.accountCode} onChange={(event) => updateBillItem(index, "accountCode", event.target.value)} disabled={!canEdit}>
+                  {purchaseAccounts.map((account) => (
+                    <option key={account.code} value={account.code}>{account.code} {account.nameEn}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Description
+                <input value={item.description} onChange={(event) => updateBillItem(index, "description", event.target.value)} disabled={!canEdit} />
+              </label>
+              <label>
+                Quantity
+                <input type="number" min="0.01" step="0.01" value={item.quantity} onChange={(event) => updateBillItem(index, "quantity", event.target.value)} disabled={!canEdit} />
+              </label>
+              <label>
+                Unit cost
+                <input type="number" min="0" value={item.unitCost} onChange={(event) => updateBillItem(index, "unitCost", event.target.value)} disabled={!canEdit} />
+              </label>
+              <div className="line-total">
+                <span>Line total</span>
+                <strong>{money((Number(item.quantity) || 0) * (Number(item.unitCost) || 0))}</strong>
+              </div>
+              <button className="text-button icon-button danger" onClick={() => removeBillLine(index)} disabled={!canEdit || billDraft.items.length === 1} title="Remove line">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="sales-totals">
+          <span>Subtotal {money(subtotal)}</span>
+          <strong>Total {money(total)}</strong>
+        </div>
+
+        {purchaseStatus && <p className="notice">{purchaseStatus}</p>}
+        <div className="form-actions">
+          <button className="secondary-button" onClick={addBillLine} disabled={!canEdit || isSaving}>
+            <Plus size={17} />
+            Add line
+          </button>
+          <button className="primary-button" onClick={saveBillDraft} disabled={!canEdit || isSaving || !vendors.length || !purchaseAccounts.length}>
+            Save bill
+          </button>
+        </div>
+      </section>
+
+      <section className="panel full-page-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Purchase bills</h2>
+            <p>{bills.length} bills from Supabase</p>
+          </div>
+        </div>
+        <DataTable
+          columns={["Bill", "Vendor", "Total", "Status", "Actions", "Bill date", "Due", "Ledger"]}
+          rows={bills.map((bill) => [
+            bill.billNo,
+            bill.vendorName || "Unknown vendor",
+            money(bill.totalAmount),
+            <StatusPill tone={billStatusTone(bill.status)} key={`${bill.id}-status`}>{bill.status}</StatusPill>,
+            <span className="table-actions" key={`${bill.id}-actions`}>
+              <button className="text-button" onClick={() => postBillDraft(bill)} disabled={!canEdit || isSaving || bill.status !== "draft"}>
+                Post
+              </button>
+            </span>,
+            bill.billDate,
+            bill.dueDate,
+            bill.postedEntryNo || "Not posted",
+          ])}
+          empty="No purchase bills"
+        />
+      </section>
+
+      <section className="panel full-page-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Vendors</h2>
+            <p>{vendors.length} supplier profiles</p>
+          </div>
+        </div>
+        <DataTable
+          columns={["Name", "Email", "Phone", "Status"]}
+          rows={vendors.map((vendor) => [
+            vendor.name,
+            vendor.email || "No email",
+            vendor.phone || "No phone",
+            <StatusPill tone={vendor.status === "active" ? "success" : "neutral"} key={vendor.id}>{vendor.status}</StatusPill>,
+          ])}
+          empty="No vendors"
+        />
+      </section>
+    </div>
+  );
+}
+
 function AccountsPage({
   accountRows,
   accountDraft,
@@ -1167,6 +1481,83 @@ function AuditPage({ auditEvents, teamMembers }) {
   );
 }
 
+function SettingsPage({ settings, setSettings, session, company, memberRole }) {
+  function updateSetting(field, value) {
+    setSettings((current) => ({ ...current, [field]: value }));
+  }
+
+  return (
+    <div className="page-grid settings-grid">
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Appearance</h2>
+            <p>Preferences stay on this browser.</p>
+          </div>
+        </div>
+        <div className="settings-list">
+          <label className="setting-row">
+            <input
+              type="checkbox"
+              checked={settings.darkMode}
+              onChange={(event) => updateSetting("darkMode", event.target.checked)}
+            />
+            <span>
+              <strong>Dark mode</strong>
+              <small>Use a darker workspace palette.</small>
+            </span>
+          </label>
+          <label className="setting-row">
+            <input
+              type="checkbox"
+              checked={settings.compactMode}
+              onChange={(event) => updateSetting("compactMode", event.target.checked)}
+            />
+            <span>
+              <strong>Compact layout</strong>
+              <small>Reduce padding for denser tables and panels.</small>
+            </span>
+          </label>
+          <label className="setting-row">
+            <input
+              type="checkbox"
+              checked={settings.largeText}
+              onChange={(event) => updateSetting("largeText", event.target.checked)}
+            />
+            <span>
+              <strong>Larger text</strong>
+              <small>Increase app text size for readability.</small>
+            </span>
+          </label>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Workspace</h2>
+            <p>Current signed-in context.</p>
+          </div>
+        </div>
+        <dl className="summary-list">
+          <div>
+            <dt>Company</dt>
+            <dd>{company?.name ?? "No company"}</dd>
+          </div>
+          <div>
+            <dt>Role</dt>
+            <dd>{roleLabel(memberRole)}</dd>
+          </div>
+          <div>
+            <dt>Email</dt>
+            <dd>{session.user.email}</dd>
+          </div>
+        </dl>
+      </section>
+    </div>
+  );
+}
+
 function DataTable({ columns, rows = [], empty = "No data" }) {
   return (
     <div className="data-table">
@@ -1208,10 +1599,15 @@ function App() {
   const [auditEvents, setAuditEvents] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [invoices, setInvoices] = useState([]);
+  const [vendors, setVendors] = useState([]);
+  const [purchaseBills, setPurchaseBills] = useState([]);
   const [availableInvitations, setAvailableInvitations] = useState([]);
   const [customerDraft, setCustomerDraft] = useState(blankCustomer);
   const [invoiceDraft, setInvoiceDraft] = useState(() => blankInvoice());
   const [salesStatus, setSalesStatus] = useState("");
+  const [vendorDraft, setVendorDraft] = useState(blankVendor);
+  const [billDraft, setBillDraft] = useState(() => blankPurchaseBill());
+  const [purchaseStatus, setPurchaseStatus] = useState("");
   const [inviteDraft, setInviteDraft] = useState(blankMemberInvite);
   const [teamStatus, setTeamStatus] = useState("");
   const [companyNameDraft, setCompanyNameDraft] = useState("Rabbitwork Company");
@@ -1221,6 +1617,7 @@ function App() {
   const [dataStatus, setDataStatus] = useState("idle");
   const [dataError, setDataError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [userSettings, setUserSettings] = useState(loadStoredUserSettings);
 
   const accountsByCode = useMemo(() => new Map(accounts.map((account) => [account.code, account])), [accounts]);
   const accountRows = useMemo(() => buildAccountRows(accounts, entries), [accounts, entries]);
@@ -1268,6 +1665,9 @@ function App() {
   function applyWorkspace(workspace) {
     const nextCustomers = workspace.customers ?? [];
     const nextInvoices = workspace.invoices ?? [];
+    const nextVendors = workspace.vendors ?? [];
+    const nextPurchaseBills = workspace.purchaseBills ?? [];
+    const nextAccounts = workspace.accounts ?? [];
 
     setCompany(workspace.company ?? null);
     setMemberRole(workspace.role ?? null);
@@ -1276,16 +1676,37 @@ function App() {
     setAuditEvents(workspace.auditEvents ?? []);
     setCustomers(nextCustomers);
     setInvoices(nextInvoices);
+    setVendors(nextVendors);
+    setPurchaseBills(nextPurchaseBills);
     setAvailableInvitations(workspace.availableInvitations ?? []);
-    setAccounts(workspace.accounts ?? []);
+    setAccounts(nextAccounts);
     setEntries(workspace.entries ?? []);
     setInvoiceDraft((current) => {
       const firstCustomerId = nextCustomers.find((customer) => customer.status === "active")?.id ?? "";
       if (current.invoiceNo === nextInvoiceNo([]) && !current.customerId) return blankInvoice(nextCustomers, nextInvoices);
       return { ...current, customerId: current.customerId || firstCustomerId };
     });
+    setBillDraft((current) => {
+      const firstVendorId = nextVendors.find((vendor) => vendor.status === "active")?.id ?? "";
+      const firstAccountCode = nextAccounts.find((account) => account.type === "Expense")?.code ?? "6200";
+      if (current.billNo === nextBillNo([]) && !current.vendorId) {
+        return blankPurchaseBill(nextVendors, nextPurchaseBills, nextAccounts);
+      }
+      return {
+        ...current,
+        vendorId: current.vendorId || firstVendorId,
+        items: current.items.map((item) => ({ ...item, accountCode: item.accountCode || firstAccountCode })),
+      };
+    });
     setDataStatus("supabase");
   }
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = userSettings.darkMode ? "dark" : "light";
+    document.documentElement.dataset.density = userSettings.compactMode ? "compact" : "comfortable";
+    document.documentElement.dataset.textSize = userSettings.largeText ? "large" : "normal";
+    window.localStorage.setItem("accounting-user-settings", JSON.stringify(userSettings));
+  }, [userSettings]);
 
   useEffect(() => {
     let mounted = true;
@@ -1359,6 +1780,8 @@ function App() {
     setAuditEvents([]);
     setCustomers([]);
     setInvoices([]);
+    setVendors([]);
+    setPurchaseBills([]);
     setAvailableInvitations([]);
     setCompany(null);
     setMemberRole(null);
@@ -1369,6 +1792,9 @@ function App() {
     setCustomerDraft(blankCustomer);
     setInvoiceDraft(blankInvoice());
     setSalesStatus("");
+    setVendorDraft(blankVendor);
+    setBillDraft(blankPurchaseBill());
+    setPurchaseStatus("");
     setInviteDraft(blankMemberInvite);
     setActivePage("dashboard");
   }
@@ -1603,6 +2029,112 @@ function App() {
     }
   }
 
+  async function handleSaveVendorDraft() {
+    if (!company?.id) return;
+    if (!vendorDraft.name.trim()) {
+      setPurchaseStatus("Vendor name is required.");
+      return;
+    }
+
+    const nextVendor = {
+      ...vendorDraft,
+      companyId: company.id,
+      name: vendorDraft.name.trim(),
+      email: vendorDraft.email.trim(),
+      phone: vendorDraft.phone.trim(),
+      taxId: vendorDraft.taxId.trim(),
+      billingAddress: vendorDraft.billingAddress.trim(),
+    };
+
+    setIsSaving(true);
+    setPurchaseStatus("");
+    try {
+      const savedVendor = await saveVendor(nextVendor);
+      const nextVendors = [
+        savedVendor,
+        ...vendors.filter((vendor) => vendor.id !== savedVendor.id),
+      ].sort((a, b) => a.name.localeCompare(b.name));
+      setVendors(nextVendors);
+      setVendorDraft(blankVendor);
+      setBillDraft((current) => ({ ...current, vendorId: current.vendorId || savedVendor.id }));
+      setPurchaseStatus("Vendor saved.");
+    } catch (error) {
+      setPurchaseStatus(error?.message ?? "Could not save vendor.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleSavePurchaseBillDraft() {
+    if (!company?.id) return;
+    const trimmedItems = billDraft.items.map((item) => ({
+      accountCode: item.accountCode,
+      description: item.description.trim(),
+      quantity: Number(item.quantity) || 0,
+      unitCost: Number(item.unitCost) || 0,
+    }));
+
+    if (!billDraft.billNo.trim() || !billDraft.vendorId) {
+      setPurchaseStatus("Bill number and vendor are required.");
+      return;
+    }
+
+    if (!billDraft.billDate || !billDraft.dueDate || billDraft.dueDate < billDraft.billDate) {
+      setPurchaseStatus("Bill dates are invalid.");
+      return;
+    }
+
+    if (!trimmedItems.length || trimmedItems.some((item) => !item.accountCode || !item.description || item.quantity <= 0 || item.unitCost < 0)) {
+      setPurchaseStatus("Every bill line needs an account, description, positive quantity, and non-negative unit cost.");
+      return;
+    }
+
+    const nextBill = {
+      ...billDraft,
+      companyId: company.id,
+      billNo: billDraft.billNo.trim(),
+      items: trimmedItems,
+      taxAmount: Number(billDraft.taxAmount) || 0,
+    };
+
+    if (billSubtotal(nextBill) <= 0) {
+      setPurchaseStatus("Bill subtotal must be greater than zero.");
+      return;
+    }
+
+    setIsSaving(true);
+    setPurchaseStatus("");
+    try {
+      const savedBill = await savePurchaseBill(nextBill);
+      const nextBills = [
+        savedBill,
+        ...purchaseBills.filter((bill) => bill.id !== savedBill.id),
+      ].sort((a, b) => b.billDate.localeCompare(a.billDate));
+      setPurchaseBills(nextBills);
+      setBillDraft(blankPurchaseBill(vendors, nextBills, accounts));
+      setPurchaseStatus("Bill saved as draft.");
+    } catch (error) {
+      setPurchaseStatus(error?.message ?? "Could not save bill.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handlePostPurchaseBillDraft(bill) {
+    setIsSaving(true);
+    setPurchaseStatus("");
+    try {
+      const postedEntryNo = await postPurchaseBill(bill.id);
+      const workspace = await loadAccountingWorkspace();
+      applyWorkspace(workspace);
+      setPurchaseStatus(`Bill posted to ${postedEntryNo}.`);
+    } catch (error) {
+      setPurchaseStatus(error?.message ?? "Could not post bill.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   async function handleAddMember() {
     if (!company?.id) return;
     if (!inviteDraft.email.trim()) {
@@ -1766,12 +2298,6 @@ function App() {
             <h1>{pageTitles[activePage]}</h1>
           </div>
           <div className="topbar-actions">
-            <StatusPill tone={dataStatus === "error" ? "warning" : "success"}>
-              {dataStatus === "loading" && "Loading Supabase"}
-              {dataStatus === "supabase" && "Data source: Supabase"}
-              {dataStatus === "error" && "Supabase error"}
-              {dataStatus === "idle" && "Ready"}
-            </StatusPill>
             <button className="secondary-button" onClick={handleSignOut}>
               <LogOut size={17} />
               Sign out
@@ -1830,6 +2356,23 @@ function App() {
                 isSaving={isSaving}
               />
             )}
+            {activePage === "purchases" && (
+              <PurchasesPage
+                accounts={accounts}
+                vendors={vendors}
+                bills={purchaseBills}
+                vendorDraft={vendorDraft}
+                setVendorDraft={setVendorDraft}
+                billDraft={billDraft}
+                setBillDraft={setBillDraft}
+                purchaseStatus={purchaseStatus}
+                saveVendorDraft={handleSaveVendorDraft}
+                saveBillDraft={handleSavePurchaseBillDraft}
+                postBillDraft={handlePostPurchaseBillDraft}
+                canEdit={userCanManageAccounting}
+                isSaving={isSaving}
+              />
+            )}
             {activePage === "accounts" && (
               <AccountsPage
                 accountRows={accountRows}
@@ -1863,6 +2406,15 @@ function App() {
               />
             )}
             {activePage === "audit" && <AuditPage auditEvents={auditEvents} teamMembers={teamMembers} />}
+            {activePage === "settings" && (
+              <SettingsPage
+                settings={userSettings}
+                setSettings={setUserSettings}
+                session={session}
+                company={company}
+                memberRole={memberRole}
+              />
+            )}
           </>
         )}
       </section>

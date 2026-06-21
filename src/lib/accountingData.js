@@ -114,6 +114,50 @@ function mapInvoice(row, items = []) {
   };
 }
 
+function mapVendor(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    name: row.name,
+    email: row.email ?? "",
+    phone: row.phone ?? "",
+    taxId: row.tax_id ?? "",
+    billingAddress: row.billing_address ?? "",
+    status: row.status,
+    createdAt: row.created_at,
+  };
+}
+
+function mapPurchaseBill(row, items = []) {
+  return {
+    id: row.id,
+    companyId: row.company_id,
+    vendorId: row.vendor_id,
+    vendorName: row.vendor?.name ?? "",
+    billNo: row.bill_no,
+    billDate: row.bill_date,
+    dueDate: row.due_date,
+    status: row.status,
+    subtotal: Number(row.subtotal) || 0,
+    taxAmount: Number(row.tax_amount) || 0,
+    totalAmount: Number(row.total_amount) || 0,
+    postedEntryNo: row.posted_entry_no,
+    notes: row.notes ?? "",
+    items: items
+      .filter((item) => item.bill_id === row.id)
+      .sort((a, b) => a.line_no - b.line_no)
+      .map((item) => ({
+        id: item.id,
+        lineNo: item.line_no,
+        accountCode: item.account_code,
+        description: item.description,
+        quantity: Number(item.quantity) || 0,
+        unitCost: Number(item.unit_cost) || 0,
+        lineTotal: Number(item.line_total) || 0,
+      })),
+  };
+}
+
 export async function loadAccountingWorkspace() {
   if (!isSupabaseConfigured || !supabase) {
     return { configured: false };
@@ -152,6 +196,8 @@ export async function loadAccountingWorkspace() {
       availableInvitations: (availableInvitations ?? []).map(mapInvitation),
       customers: [],
       invoices: [],
+      vendors: [],
+      purchaseBills: [],
       accounts: [],
       entries: [],
     };
@@ -167,6 +213,9 @@ export async function loadAccountingWorkspace() {
     customersResult,
     invoicesResult,
     invoiceItemsResult,
+    vendorsResult,
+    purchaseBillsResult,
+    purchaseBillItemsResult,
   ] = await Promise.all([
     supabase
       .from("accounting_accounts")
@@ -214,6 +263,20 @@ export async function loadAccountingWorkspace() {
       .from("sales_invoice_items")
       .select("id,invoice_id,line_no,description,quantity,unit_price,line_total")
       .order("line_no", { ascending: true }),
+    supabase
+      .from("purchase_vendors")
+      .select("id,company_id,name,email,phone,tax_id,billing_address,status,created_at")
+      .eq("company_id", company.id)
+      .order("name", { ascending: true }),
+    supabase
+      .from("purchase_bills")
+      .select("id,company_id,vendor_id,bill_no,bill_date,due_date,status,subtotal,tax_amount,total_amount,posted_entry_no,notes,vendor:purchase_vendors(name)")
+      .eq("company_id", company.id)
+      .order("bill_date", { ascending: false }),
+    supabase
+      .from("purchase_bill_items")
+      .select("id,bill_id,line_no,account_code,description,quantity,unit_cost,line_total")
+      .order("line_no", { ascending: true }),
   ]);
 
   const error =
@@ -225,7 +288,10 @@ export async function loadAccountingWorkspace() {
     auditResult.error ??
     customersResult.error ??
     invoicesResult.error ??
-    invoiceItemsResult.error;
+    invoiceItemsResult.error ??
+    vendorsResult.error ??
+    purchaseBillsResult.error ??
+    purchaseBillItemsResult.error;
   if (error) {
     throw error;
   }
@@ -256,6 +322,8 @@ export async function loadAccountingWorkspace() {
     availableInvitations: [],
     customers: (customersResult.data ?? []).map(mapCustomer),
     invoices: (invoicesResult.data ?? []).map((invoice) => mapInvoice(invoice, invoiceItemsResult.data ?? [])),
+    vendors: (vendorsResult.data ?? []).map(mapVendor),
+    purchaseBills: (purchaseBillsResult.data ?? []).map((bill) => mapPurchaseBill(bill, purchaseBillItemsResult.data ?? [])),
     accounts: (accountsResult.data ?? []).map(mapAccount),
     entries: (entriesResult.data ?? []).map((entry) => mapJournalEntry(entry, linesResult.data ?? [])),
   };
@@ -543,6 +611,87 @@ export async function postInvoice(invoiceId) {
 
   const { data, error } = await supabase.rpc("post_sales_invoice", {
     target_invoice_id: invoiceId,
+  });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function saveVendor(vendor) {
+  if (!supabase) throw new Error("Supabase is not configured");
+  if (!vendor.companyId) throw new Error("No company is selected for this vendor");
+
+  const payload = {
+    company_id: vendor.companyId,
+    name: vendor.name,
+    email: vendor.email || null,
+    phone: vendor.phone || null,
+    tax_id: vendor.taxId || null,
+    billing_address: vendor.billingAddress || null,
+    status: vendor.status ?? "active",
+    updated_at: new Date().toISOString(),
+  };
+
+  const query = vendor.id
+    ? supabase.from("purchase_vendors").update(payload).eq("id", vendor.id)
+    : supabase.from("purchase_vendors").insert(payload);
+
+  const { data, error } = await query
+    .select("id,company_id,name,email,phone,tax_id,billing_address,status,created_at")
+    .single();
+
+  if (error) throw error;
+  return mapVendor(data);
+}
+
+export async function savePurchaseBill(bill) {
+  if (!supabase) throw new Error("Supabase is not configured");
+  if (!bill.companyId) throw new Error("No company is selected for this bill");
+
+  const rpcItems = bill.items.map((item) => ({
+    accountCode: item.accountCode,
+    description: item.description,
+    quantity: Number(item.quantity) || 0,
+    unitCost: Number(item.unitCost) || 0,
+  }));
+
+  const { data: billId, error: rpcError } = await supabase.rpc("save_purchase_bill", {
+    target_bill_id: bill.id ?? null,
+    target_company_id: bill.companyId,
+    target_vendor_id: bill.vendorId,
+    target_bill_no: bill.billNo,
+    target_bill_date: bill.billDate,
+    target_due_date: bill.dueDate,
+    target_tax_amount: Number(bill.taxAmount) || 0,
+    target_notes: bill.notes ?? "",
+    target_items: rpcItems,
+  });
+
+  if (rpcError) throw rpcError;
+
+  const { data: billRow, error: billError } = await supabase
+    .from("purchase_bills")
+    .select("id,company_id,vendor_id,bill_no,bill_date,due_date,status,subtotal,tax_amount,total_amount,posted_entry_no,notes,vendor:purchase_vendors(name)")
+    .eq("id", billId)
+    .single();
+
+  if (billError) throw billError;
+
+  const { data: itemRows, error: itemError } = await supabase
+    .from("purchase_bill_items")
+    .select("id,bill_id,line_no,account_code,description,quantity,unit_cost,line_total")
+    .eq("bill_id", billRow.id)
+    .order("line_no", { ascending: true });
+
+  if (itemError) throw itemError;
+  return mapPurchaseBill(billRow, itemRows ?? []);
+}
+
+export async function postPurchaseBill(billId) {
+  if (!supabase) throw new Error("Supabase is not configured");
+
+  const { data, error } = await supabase.rpc("post_purchase_bill", {
+    target_bill_id: billId,
   });
 
   if (error) throw error;
