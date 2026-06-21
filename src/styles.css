@@ -521,10 +521,27 @@ textarea:focus {
   color: var(--ink-800);
 }
 
-.setting-row input {
+.setting-row input[type="checkbox"] {
   width: 18px;
   height: 18px;
   margin-top: 2px;
+}
+
+.setting-row select {
+  width: min(100%, 240px);
+  margin-top: 10px;
+}
+
+.setting-icon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  margin-top: 1px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--teal-700);
+  font-weight: 800;
 }
 
 .setting-row strong,
