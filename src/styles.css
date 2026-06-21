@@ -263,6 +263,11 @@ select {
   gap: 12px;
 }
 
+.top-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .select-button,
 .icon-button,
 .profile-chip,
@@ -311,6 +316,36 @@ select {
   background: var(--navy-800);
   color: white;
   font-size: 12px;
+}
+
+.auth-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.auth-panel.signed-in {
+  flex-wrap: wrap;
+}
+
+.auth-panel input {
+  width: 150px;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--control-bg);
+  color: var(--ink-950);
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.auth-panel .profile-chip {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .segmented {
@@ -592,6 +627,10 @@ html[data-theme="dark"] .icon-button.active {
   color: white;
   border-color: var(--teal-700);
   background: var(--teal-700);
+}
+
+.mini-button.secondary {
+  color: var(--ink-600);
 }
 
 .steps {

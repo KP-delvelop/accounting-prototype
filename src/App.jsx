@@ -29,7 +29,15 @@ import {
 } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import { excelSeed } from "./data/excelSeed.js";
-import { loadAccountingWorkspace } from "./lib/accountingData.js";
+import {
+  getCurrentSession,
+  loadAccountingWorkspace,
+  onAuthChange,
+  saveJournalEntry,
+  signInWithEmail,
+  signOut,
+  signUpWithEmail,
+} from "./lib/accountingData.js";
 
 const STORAGE_KEY = "accounting-prototype-ledger-v2";
 const THEME_STORAGE_KEY = "accounting-prototype-theme-v1";
@@ -781,6 +789,11 @@ function App() {
   const [accountTypeFilter, setAccountTypeFilter] = useState("All");
   const [dataStatus, setDataStatus] = useState("loading");
   const [dataError, setDataError] = useState("");
+  const [session, setSession] = useState(null);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authStatus, setAuthStatus] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   const accountsByCode = useMemo(
     () => new Map(accounts.map((account) => [account.code, account])),
@@ -984,6 +997,30 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let isMounted = true;
+
+    async function loadSession() {
+      try {
+        const currentSession = await getCurrentSession();
+        if (isMounted) setSession(currentSession);
+      } catch (error) {
+        if (isMounted) setAuthStatus(error?.message ?? "Could not load auth session");
+      }
+    }
+
+    loadSession();
+    const unsubscribe = onAuthChange((nextSession) => {
+      setSession(nextSession);
+      if (nextSession) setAuthStatus("");
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     window.localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
@@ -1012,30 +1049,41 @@ function App() {
     setEditingEntryId(null);
   }
 
+  async function commitDraft(status) {
+    if (!session) {
+      setAuthStatus("Sign in to save journal changes to Supabase.");
+      return;
+    }
+    if (status === "posted" && !draftAnalysis.canPost) return;
+
+    setIsSaving(true);
+    setAuthStatus("");
+
+    try {
+      const id = editingEntryId ?? nextJournalId(entries);
+      const entry = draftToEntry(draft, id, status);
+      await saveJournalEntry(entry);
+      setEntries((currentEntries) => {
+        if (editingEntryId) {
+          return currentEntries.map((item) => (item.id === editingEntryId ? entry : item));
+        }
+        return [entry, ...currentEntries];
+      });
+      resetDraft();
+      setAuthStatus("Saved to Supabase.");
+    } catch (error) {
+      setAuthStatus(error?.message ?? "Could not save to Supabase.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   function saveDraftForReview() {
-    setEntries((currentEntries) => {
-      const id = editingEntryId ?? nextJournalId(currentEntries);
-      const entry = draftToEntry(draft, id, "review");
-      if (editingEntryId) {
-        return currentEntries.map((item) => (item.id === editingEntryId ? entry : item));
-      }
-      return [entry, ...currentEntries];
-    });
-    resetDraft();
+    commitDraft("review");
   }
 
   function postDraft() {
-    if (!draftAnalysis.canPost) return;
-
-    setEntries((currentEntries) => {
-      const id = editingEntryId ?? nextJournalId(currentEntries);
-      const entry = draftToEntry(draft, id, "posted");
-      if (editingEntryId) {
-        return currentEntries.map((item) => (item.id === editingEntryId ? entry : item));
-      }
-      return [entry, ...currentEntries];
-    });
-    resetDraft();
+    commitDraft("posted");
   }
 
   function reviewEntry(entry) {
@@ -1075,6 +1123,38 @@ function App() {
     anchor.download = "accounting-prototype-workspace.json";
     anchor.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function handleSignIn(event) {
+    event.preventDefault();
+    setAuthStatus("");
+    try {
+      await signInWithEmail(authEmail, authPassword);
+      setAuthPassword("");
+      setAuthStatus("Signed in.");
+    } catch (error) {
+      setAuthStatus(error?.message ?? "Could not sign in.");
+    }
+  }
+
+  async function handleSignUp() {
+    setAuthStatus("");
+    try {
+      const nextSession = await signUpWithEmail(authEmail, authPassword);
+      setAuthPassword("");
+      setAuthStatus(nextSession ? "Account created and signed in." : "Account created. Check your email to confirm.");
+    } catch (error) {
+      setAuthStatus(error?.message ?? "Could not create account.");
+    }
+  }
+
+  async function handleSignOut() {
+    try {
+      await signOut();
+      setAuthStatus("Signed out.");
+    } catch (error) {
+      setAuthStatus(error?.message ?? "Could not sign out.");
+    }
   }
 
   return (
@@ -1179,11 +1259,38 @@ function App() {
             <button className="icon-button" title={text.settings}>
               <Settings size={18} />
             </button>
-            <div className="profile-chip">
-              <span>AC</span>
-              {text.accountant}
-              <ChevronDown size={15} />
-            </div>
+            {session ? (
+              <div className="auth-panel signed-in">
+                <div className="profile-chip">
+                  <span>AC</span>
+                  {session.user.email}
+                </div>
+                <button className="mini-button" onClick={handleSignOut}>
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <form className="auth-panel" onSubmit={handleSignIn}>
+                <input
+                  type="email"
+                  placeholder="Email"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                />
+                <input
+                  type="password"
+                  placeholder="Password"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                />
+                <button className="mini-button" type="submit">
+                  Sign in
+                </button>
+                <button className="mini-button secondary" type="button" onClick={handleSignUp}>
+                  Sign up
+                </button>
+              </form>
+            )}
           </div>
         </header>
 
@@ -1197,6 +1304,10 @@ function App() {
               {dataStatus === "supabase" && "Data source: Supabase"}
               {dataStatus === "local" && "Data source: local demo"}
               {dataStatus === "error" && `Supabase fallback: ${dataError}`}
+            </small>
+            <small className={session ? "data-source" : "data-source warning"}>
+              {session ? `Signed in as ${session.user.email}` : "Read-only until you sign in"}
+              {authStatus ? ` - ${authStatus}` : ""}
             </small>
           </div>
           <div className="hero-actions">
@@ -1486,13 +1597,13 @@ function App() {
                   <RefreshCcw size={17} />
                   {text.clearButton}
                 </button>
-                <button className="secondary-button" onClick={saveDraftForReview}>
+                <button className="secondary-button" onClick={saveDraftForReview} disabled={!session || isSaving}>
                   <Save size={17} />
-                  {text.saveForReview}
+                  {isSaving ? "Saving" : text.saveForReview}
                 </button>
-                <button className="primary-button" onClick={postDraft} disabled={!draftAnalysis.canPost}>
+                <button className="primary-button" onClick={postDraft} disabled={!draftAnalysis.canPost || !session || isSaving}>
                   <PlusCircle size={17} />
-                  {editingEntryId ? text.updateAndPost : text.postEntry}
+                  {isSaving ? "Saving" : editingEntryId ? text.updateAndPost : text.postEntry}
                 </button>
               </div>
             </section>
@@ -1500,7 +1611,7 @@ function App() {
             <section className="panel journal-ledger">
               <div className="panel-heading">
                 <div>
-                  <p className="section-label">{text.savedLocally}</p>
+                  <p className="section-label">{session ? "Saved to Supabase" : "Read-only preview"}</p>
                   <h2>{text.journalRegister}</h2>
                 </div>
                 <span className="status-pill neutral">{postedEntries.length} {text.workflowValues.posted}</span>

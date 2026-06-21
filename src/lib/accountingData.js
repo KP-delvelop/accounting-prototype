@@ -58,3 +58,75 @@ export async function loadAccountingWorkspace() {
     entries: (entriesResult.data ?? []).map((entry) => mapJournalEntry(entry, linesResult.data ?? [])),
   };
 }
+
+export async function getCurrentSession() {
+  if (!isSupabaseConfigured || !supabase) return null;
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  return data.session;
+}
+
+export function onAuthChange(callback) {
+  if (!isSupabaseConfigured || !supabase) {
+    return () => {};
+  }
+
+  const {
+    data: { subscription },
+  } = supabase.auth.onAuthStateChange((_event, session) => callback(session));
+
+  return () => subscription.unsubscribe();
+}
+
+export async function signInWithEmail(email, password) {
+  if (!supabase) throw new Error("Supabase is not configured");
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data.session;
+}
+
+export async function signUpWithEmail(email, password) {
+  if (!supabase) throw new Error("Supabase is not configured");
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw error;
+  return data.session;
+}
+
+export async function signOut() {
+  if (!supabase) return;
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+export async function saveJournalEntry(entry) {
+  if (!supabase) throw new Error("Supabase is not configured");
+
+  const { error: entryError } = await supabase.from("accounting_journal_entries").upsert({
+    entry_no: entry.id,
+    entry_date: entry.date,
+    description: entry.description ?? "",
+    reference: entry.reference ?? "",
+    status: entry.status,
+    updated_at: new Date().toISOString(),
+  });
+
+  if (entryError) throw entryError;
+
+  const { error: deleteError } = await supabase
+    .from("accounting_journal_lines")
+    .delete()
+    .eq("entry_no", entry.id);
+
+  if (deleteError) throw deleteError;
+
+  const rows = entry.lines.map((line, index) => ({
+    entry_no: entry.id,
+    line_no: index + 1,
+    account_code: line.account,
+    side: line.side,
+    amount: Number(line.amount) || 0,
+  }));
+
+  const { error: linesError } = await supabase.from("accounting_journal_lines").insert(rows);
+  if (linesError) throw linesError;
+}

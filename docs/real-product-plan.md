@@ -17,11 +17,14 @@
 
 ## Phase 2: Real Write Workflow
 
-1. Add Supabase Auth for team login.
-2. Move journal create/update/post actions from `localStorage` to Supabase.
-3. Replace public write access with authenticated write policies.
-4. Add audit fields such as `created_by`, `updated_by`, `posted_by`, and `posted_at`.
-5. Add validation rules for balanced entries before posting.
+Status: partially implemented.
+
+1. Supabase Auth email/password controls are available in the app.
+2. Anonymous visitors are read-only.
+3. Signed-in users can create/update journal entries in Supabase.
+4. Journal write policies require an authenticated Supabase user.
+5. Next: add audit fields such as `created_by`, `updated_by`, `posted_by`, and `posted_at`.
+6. Next: add database-level validation rules for balanced entries before posting.
 
 ## Phase 3: Business Model
 
