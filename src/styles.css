@@ -202,6 +202,17 @@ textarea:focus {
   padding-inline: 6px;
 }
 
+.text-button.danger,
+.icon-button.danger {
+  color: #b42318;
+}
+
+.icon-button {
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+}
+
 .auth-message,
 .validation,
 .notice {
@@ -402,6 +413,10 @@ textarea:focus {
   grid-template-columns: repeat(3, minmax(220px, 1fr));
 }
 
+.management-grid {
+  grid-template-columns: minmax(280px, 0.45fr) minmax(0, 1fr);
+}
+
 .metric,
 .panel,
 .loading-panel {
@@ -524,12 +539,27 @@ textarea:focus {
   color: var(--ink-950);
 }
 
+.table-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.role-select {
+  min-height: 34px;
+  padding: 6px 8px;
+}
+
 .empty-state {
   padding: 18px 13px;
 }
 
 .full-page-panel {
   min-width: 0;
+}
+
+.management-grid .full-page-panel {
+  grid-column: 1 / -1;
 }
 
 .notice {
@@ -596,6 +626,7 @@ textarea:focus {
   .dashboard-grid,
   .journal-grid,
   .reports-grid,
+  .management-grid,
   .entry-form {
     grid-template-columns: 1fr;
   }

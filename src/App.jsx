@@ -8,22 +8,33 @@ import {
   Landmark,
   LayoutDashboard,
   LogOut,
+  Pencil,
   Plus,
   ReceiptText,
   RefreshCcw,
   Scale,
   Table2,
+  Trash2,
+  UserPlus,
+  Users,
   WalletCards,
+  XCircle,
 } from "lucide-react";
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  createCompanyInvitation,
+  deleteAccount,
   getCurrentSession,
   loadAccountingWorkspace,
   onAuthChange,
+  removeCompanyMember,
+  saveAccount,
   saveJournalEntry,
   signInWithEmail,
   signOut,
   signUpWithEmail,
+  updateCompanyMemberRole,
+  voidJournalEntry,
 } from "./lib/accountingData.js";
 
 const navItems = [
@@ -32,6 +43,7 @@ const navItems = [
   { id: "accounts", label: "Chart of Accounts", icon: Table2 },
   { id: "trial", label: "Trial Balance", icon: Scale },
   { id: "reports", label: "Reports", icon: FileSpreadsheet },
+  { id: "team", label: "Team", icon: Users },
 ];
 
 const blankDraft = {
@@ -50,6 +62,26 @@ const pageTitles = {
   accounts: "Chart of Accounts",
   trial: "Trial Balance",
   reports: "Reports",
+  team: "Team",
+};
+
+const roleOptions = ["owner", "admin", "accountant", "reviewer", "viewer"];
+const accountTypes = ["Asset", "Liability", "Equity", "Revenue", "Expense"];
+const normalSides = ["debit", "credit"];
+
+const blankAccount = {
+  code: "",
+  nameEn: "",
+  nameLao: "",
+  type: "Asset",
+  normalSide: "debit",
+  openingDebit: 0,
+  openingCredit: 0,
+};
+
+const blankMemberInvite = {
+  email: "",
+  role: "viewer",
 };
 
 function formatKip(value) {
@@ -169,6 +201,19 @@ function nextJournalId(entries) {
 
 function StatusPill({ tone = "neutral", children }) {
   return <span className={`status-pill ${tone}`}>{children}</span>;
+}
+
+function roleLabel(role) {
+  if (!role) return "Member";
+  return role[0].toUpperCase() + role.slice(1);
+}
+
+function canManageTeam(role) {
+  return ["owner", "admin"].includes(role);
+}
+
+function canManageAccounting(role) {
+  return ["owner", "admin", "accountant"].includes(role);
 }
 
 function LoginGate({ authEmail, authPassword, authStatus, setAuthEmail, setAuthPassword, onSignIn, onSignUp }) {
@@ -344,7 +389,22 @@ function DashboardPage({ totals, reviewEntries, recentEntries, reports, setActiv
   );
 }
 
-function JournalPage({ accounts, accountsByCode, entries, draft, setDraft, draftAnalysis, saveDraft, postDraft, isSaving }) {
+function JournalPage({
+  accounts,
+  accountsByCode,
+  entries,
+  draft,
+  setDraft,
+  draftAnalysis,
+  saveDraft,
+  postDraft,
+  isSaving,
+  canEdit,
+  editingEntryId,
+  cancelEdit,
+  startEditEntry,
+  voidEntry,
+}) {
   function updateDraft(field, value) {
     setDraft((current) => ({ ...current, [field]: value }));
   }
@@ -354,8 +414,8 @@ function JournalPage({ accounts, accountsByCode, entries, draft, setDraft, draft
       <section className="panel journal-form-panel">
         <div className="panel-head">
           <div>
-            <h2>Post entry</h2>
-            <p>Signed-in changes are saved to Supabase.</p>
+            <h2>{editingEntryId ? "Edit entry" : "Post entry"}</h2>
+            <p>{canEdit ? "Signed-in changes are saved to Supabase." : "Your role has read-only journal access."}</p>
           </div>
           <StatusPill tone={draftAnalysis.canPost ? "success" : "warning"}>
             {draftAnalysis.canPost ? "Ready" : "Needs review"}
@@ -364,19 +424,19 @@ function JournalPage({ accounts, accountsByCode, entries, draft, setDraft, draft
         <div className="entry-form">
           <label>
             Date
-            <input value={draft.date} onChange={(event) => updateDraft("date", event.target.value)} type="date" />
+            <input value={draft.date} onChange={(event) => updateDraft("date", event.target.value)} type="date" disabled={!canEdit} />
           </label>
           <label>
             Reference
-            <input value={draft.reference} onChange={(event) => updateDraft("reference", event.target.value)} />
+            <input value={draft.reference} onChange={(event) => updateDraft("reference", event.target.value)} disabled={!canEdit} />
           </label>
           <label className="span-2">
             Description
-            <input value={draft.description} onChange={(event) => updateDraft("description", event.target.value)} />
+            <input value={draft.description} onChange={(event) => updateDraft("description", event.target.value)} disabled={!canEdit} />
           </label>
           <label>
             Debit account
-            <select value={draft.debitAccount} onChange={(event) => updateDraft("debitAccount", event.target.value)}>
+            <select value={draft.debitAccount} onChange={(event) => updateDraft("debitAccount", event.target.value)} disabled={!canEdit}>
               {accounts.map((account) => (
                 <option key={account.code} value={account.code}>
                   {account.code} {account.nameEn}
@@ -386,11 +446,11 @@ function JournalPage({ accounts, accountsByCode, entries, draft, setDraft, draft
           </label>
           <label>
             Debit amount
-            <input type="number" value={draft.debit} min="0" onChange={(event) => updateDraft("debit", event.target.value)} />
+            <input type="number" value={draft.debit} min="0" onChange={(event) => updateDraft("debit", event.target.value)} disabled={!canEdit} />
           </label>
           <label>
             Credit account
-            <select value={draft.creditAccount} onChange={(event) => updateDraft("creditAccount", event.target.value)}>
+            <select value={draft.creditAccount} onChange={(event) => updateDraft("creditAccount", event.target.value)} disabled={!canEdit}>
               {accounts.map((account) => (
                 <option key={account.code} value={account.code}>
                   {account.code} {account.nameEn}
@@ -400,20 +460,25 @@ function JournalPage({ accounts, accountsByCode, entries, draft, setDraft, draft
           </label>
           <label>
             Credit amount
-            <input type="number" value={draft.credit} min="0" onChange={(event) => updateDraft("credit", event.target.value)} />
+            <input type="number" value={draft.credit} min="0" onChange={(event) => updateDraft("credit", event.target.value)} disabled={!canEdit} />
           </label>
         </div>
         <div className={draftAnalysis.canPost ? "validation success" : "validation warning"}>
           {draftAnalysis.canPost ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
           <span>
-            Debit {money(draftAnalysis.debit)} · Credit {money(draftAnalysis.credit)} · Difference {money(draftAnalysis.difference)}
+            Debit {money(draftAnalysis.debit)} - Credit {money(draftAnalysis.credit)} - Difference {money(draftAnalysis.difference)}
           </span>
         </div>
         <div className="form-actions">
-          <button className="secondary-button" onClick={saveDraft} disabled={isSaving}>
+          {editingEntryId && (
+            <button className="secondary-button" onClick={cancelEdit} disabled={isSaving}>
+              Cancel edit
+            </button>
+          )}
+          <button className="secondary-button" onClick={saveDraft} disabled={!canEdit || isSaving}>
             Save for review
           </button>
-          <button className="primary-button" onClick={postDraft} disabled={!draftAnalysis.canPost || isSaving}>
+          <button className="primary-button" onClick={postDraft} disabled={!canEdit || !draftAnalysis.canPost || isSaving}>
             {isSaving ? "Saving" : "Post entry"}
           </button>
         </div>
@@ -427,7 +492,7 @@ function JournalPage({ accounts, accountsByCode, entries, draft, setDraft, draft
           </div>
         </div>
         <DataTable
-          columns={["Entry No.", "Date", "Description", "Debit", "Credit", "Status"]}
+          columns={["Entry No.", "Date", "Description", "Debit", "Credit", "Status", "Actions"]}
           rows={entries.map((entry) => {
             const totals = analyzeEntry(entry, accountsByCode);
             return [
@@ -439,6 +504,14 @@ function JournalPage({ accounts, accountsByCode, entries, draft, setDraft, draft
               <StatusPill tone={entry.status === "posted" ? "success" : "warning"} key={entry.id}>
                 {entry.status}
               </StatusPill>,
+              <span className="table-actions" key={`${entry.id}-actions`}>
+                <button className="text-button icon-button" onClick={() => startEditEntry(entry)} disabled={!canEdit || entry.status === "void"} title="Edit entry">
+                  <Pencil size={15} />
+                </button>
+                <button className="text-button icon-button danger" onClick={() => voidEntry(entry)} disabled={!canEdit || entry.status === "void"} title="Void entry">
+                  <XCircle size={15} />
+                </button>
+              </span>,
             ];
           })}
         />
@@ -447,28 +520,108 @@ function JournalPage({ accounts, accountsByCode, entries, draft, setDraft, draft
   );
 }
 
-function AccountsPage({ accountRows }) {
+function AccountsPage({
+  accountRows,
+  accountDraft,
+  setAccountDraft,
+  editingAccountCode,
+  startEditAccount,
+  cancelAccountEdit,
+  saveAccountDraft,
+  deleteAccountRow,
+  accountStatus,
+  canEdit,
+  isSaving,
+}) {
+  function updateAccount(field, value) {
+    setAccountDraft((current) => ({ ...current, [field]: value }));
+  }
+
   return (
-    <section className="panel full-page-panel">
-      <div className="panel-head">
-        <div>
-          <h2>Chart of Accounts</h2>
-          <p>{accountRows.length} accounts from Supabase</p>
+    <div className="page-grid management-grid">
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>{editingAccountCode ? "Edit account" : "Add account"}</h2>
+            <p>{canEdit ? "Maintain the company chart of accounts." : "Your role has read-only account access."}</p>
+          </div>
         </div>
-      </div>
-      <DataTable
-        columns={["Code", "Account", "Type", "Normal side", "Debit", "Credit", "Balance"]}
-        rows={accountRows.map((account) => [
-          account.code,
-          account.nameEn,
-          account.type,
-          account.normalSide,
-          money(account.netDebit),
-          money(account.netCredit),
-          money(account.balance),
-        ])}
-      />
-    </section>
+        <div className="entry-form">
+          <label>
+            Code
+            <input value={accountDraft.code} onChange={(event) => updateAccount("code", event.target.value)} disabled={!canEdit || !!editingAccountCode} />
+          </label>
+          <label>
+            Name
+            <input value={accountDraft.nameEn} onChange={(event) => updateAccount("nameEn", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Type
+            <select value={accountDraft.type} onChange={(event) => updateAccount("type", event.target.value)} disabled={!canEdit}>
+              {accountTypes.map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Normal side
+            <select value={accountDraft.normalSide} onChange={(event) => updateAccount("normalSide", event.target.value)} disabled={!canEdit}>
+              {normalSides.map((side) => (
+                <option key={side} value={side}>{side}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Opening debit
+            <input type="number" min="0" value={accountDraft.openingDebit} onChange={(event) => updateAccount("openingDebit", event.target.value)} disabled={!canEdit} />
+          </label>
+          <label>
+            Opening credit
+            <input type="number" min="0" value={accountDraft.openingCredit} onChange={(event) => updateAccount("openingCredit", event.target.value)} disabled={!canEdit} />
+          </label>
+        </div>
+        {accountStatus && <p className="notice">{accountStatus}</p>}
+        <div className="form-actions">
+          {editingAccountCode && (
+            <button className="secondary-button" onClick={cancelAccountEdit} disabled={isSaving}>
+              Cancel edit
+            </button>
+          )}
+          <button className="primary-button" onClick={saveAccountDraft} disabled={!canEdit || isSaving}>
+            Save account
+          </button>
+        </div>
+      </section>
+
+      <section className="panel full-page-panel">
+        <div className="panel-head">
+          <div>
+            <h2>Chart of Accounts</h2>
+            <p>{accountRows.length} accounts from Supabase</p>
+          </div>
+        </div>
+        <DataTable
+          columns={["Code", "Account", "Type", "Normal side", "Debit", "Credit", "Balance", "Actions"]}
+          rows={accountRows.map((account) => [
+            account.code,
+            account.nameEn,
+            account.type,
+            account.normalSide,
+            money(account.netDebit),
+            money(account.netCredit),
+            money(account.balance),
+            <span className="table-actions" key={`${account.code}-actions`}>
+              <button className="text-button icon-button" onClick={() => startEditAccount(account)} disabled={!canEdit} title="Edit account">
+                <Pencil size={15} />
+              </button>
+              <button className="text-button icon-button danger" onClick={() => deleteAccountRow(account)} disabled={!canEdit} title="Delete account">
+                <Trash2 size={15} />
+              </button>
+            </span>,
+          ])}
+        />
+      </section>
+    </div>
   );
 }
 
@@ -535,6 +688,116 @@ function ReportsPage({ reports, totals }) {
   );
 }
 
+function TeamPage({
+  company,
+  teamMembers,
+  invitations,
+  inviteDraft,
+  setInviteDraft,
+  teamStatus,
+  canEdit,
+  isSaving,
+  addMember,
+  changeMemberRole,
+  removeMember,
+}) {
+  function updateInvite(field, value) {
+    setInviteDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  return (
+    <div className="page-grid management-grid">
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Add team member</h2>
+            <p>{canEdit ? "Create a pending invitation for a teammate." : "Only owners and admins can manage team members."}</p>
+          </div>
+          <StatusPill tone={canEdit ? "success" : "neutral"}>{canEdit ? "Admin access" : "Read only"}</StatusPill>
+        </div>
+        <div className="entry-form">
+          <label className="span-2">
+            Email
+            <input
+              type="email"
+              value={inviteDraft.email}
+              onChange={(event) => updateInvite("email", event.target.value)}
+              disabled={!canEdit}
+              placeholder="teammate@company.com"
+            />
+          </label>
+          <label className="span-2">
+            Role
+            <select value={inviteDraft.role} onChange={(event) => updateInvite("role", event.target.value)} disabled={!canEdit}>
+              {roleOptions.map((role) => (
+                <option key={role} value={role}>{roleLabel(role)}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {teamStatus && <p className="notice">{teamStatus}</p>}
+        <div className="form-actions">
+          <button className="primary-button" onClick={addMember} disabled={!canEdit || isSaving}>
+            <UserPlus size={17} />
+            Create invitation
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Pending invitations</h2>
+            <p>{invitations.length} open invites</p>
+          </div>
+        </div>
+        <DataTable
+          columns={["Email", "Role", "Status"]}
+          rows={invitations.map((invitation) => [
+            invitation.email,
+            roleLabel(invitation.role),
+            <StatusPill tone="neutral" key={invitation.id}>{invitation.status}</StatusPill>,
+          ])}
+          empty="No pending invitations"
+        />
+      </section>
+
+      <section className="panel full-page-panel">
+        <div className="panel-head">
+          <div>
+            <h2>{company?.name ?? "Company"} team</h2>
+            <p>{teamMembers.length} members</p>
+          </div>
+        </div>
+        <DataTable
+          columns={["Name", "Email", "Role", "Actions"]}
+          rows={teamMembers.map((member) => [
+            member.displayName || member.email,
+            member.email,
+            <select
+              className="role-select"
+              value={member.role}
+              onChange={(event) => changeMemberRole(member, event.target.value)}
+              disabled={!canEdit || isSaving}
+              key={`${member.id}-role`}
+            >
+              {roleOptions.map((role) => (
+                <option key={role} value={role}>{roleLabel(role)}</option>
+              ))}
+            </select>,
+            <span className="table-actions" key={`${member.id}-actions`}>
+              <button className="text-button icon-button danger" onClick={() => removeMember(member)} disabled={!canEdit || isSaving} title="Remove member">
+                <Trash2 size={15} />
+              </button>
+            </span>,
+          ])}
+          empty="No team members"
+        />
+      </section>
+    </div>
+  );
+}
+
 function DataTable({ columns, rows = [], empty = "No data" }) {
   return (
     <div className="data-table">
@@ -567,6 +830,14 @@ function App() {
   const [accounts, setAccounts] = useState([]);
   const [entries, setEntries] = useState([]);
   const [draft, setDraft] = useState(blankDraft);
+  const [editingEntryId, setEditingEntryId] = useState(null);
+  const [accountDraft, setAccountDraft] = useState(blankAccount);
+  const [editingAccountCode, setEditingAccountCode] = useState(null);
+  const [accountStatus, setAccountStatus] = useState("");
+  const [teamMembers, setTeamMembers] = useState([]);
+  const [invitations, setInvitations] = useState([]);
+  const [inviteDraft, setInviteDraft] = useState(blankMemberInvite);
+  const [teamStatus, setTeamStatus] = useState("");
   const [company, setCompany] = useState(null);
   const [memberRole, setMemberRole] = useState(null);
   const [dataStatus, setDataStatus] = useState("idle");
@@ -578,6 +849,8 @@ function App() {
   const trialRows = useMemo(() => buildTrialRows(accountRows), [accountRows]);
   const reviewEntries = useMemo(() => entries.filter((entry) => entry.status !== "posted"), [entries]);
   const recentEntries = useMemo(() => [...entries].sort((a, b) => b.date.localeCompare(a.date)), [entries]);
+  const userCanManageTeam = canManageTeam(memberRole);
+  const userCanManageAccounting = canManageAccounting(memberRole);
   const draftAnalysis = useMemo(
     () => analyzeEntry(draftToEntry(draft, "DRAFT", "review", company?.id), accountsByCode),
     [draft, accountsByCode, company?.id],
@@ -643,6 +916,8 @@ function App() {
         if (!mounted) return;
         setCompany(workspace.company ?? null);
         setMemberRole(workspace.role ?? null);
+        setTeamMembers(workspace.teamMembers ?? []);
+        setInvitations(workspace.invitations ?? []);
         setAccounts(workspace.accounts ?? []);
         setEntries(workspace.entries ?? []);
         setDataStatus("supabase");
@@ -685,8 +960,14 @@ function App() {
     setSession(null);
     setAccounts([]);
     setEntries([]);
+    setTeamMembers([]);
+    setInvitations([]);
     setCompany(null);
     setMemberRole(null);
+    setEditingEntryId(null);
+    setAccountDraft(blankAccount);
+    setEditingAccountCode(null);
+    setInviteDraft(blankMemberInvite);
     setActivePage("dashboard");
   }
 
@@ -697,12 +978,177 @@ function App() {
       return;
     }
 
-    const entry = draftToEntry(draft, nextJournalId(entries), status, company.id);
+    const entry = draftToEntry(draft, editingEntryId || nextJournalId(entries), status, company.id);
     setIsSaving(true);
     try {
       await saveJournalEntry(entry);
-      setEntries((current) => [entry, ...current]);
+      setEntries((current) => {
+        const withoutEntry = current.filter((item) => item.id !== entry.id);
+        return [entry, ...withoutEntry];
+      });
       setDraft(blankDraft);
+      setEditingEntryId(null);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function startEditEntry(entry) {
+    const debitLine = entry.lines.find((line) => line.side === "debit") ?? entry.lines[0];
+    const creditLine = entry.lines.find((line) => line.side === "credit") ?? entry.lines[1] ?? entry.lines[0];
+
+    setEditingEntryId(entry.id);
+    setDraft({
+      date: entry.date,
+      description: entry.description,
+      reference: entry.reference,
+      debitAccount: debitLine?.account ?? accounts[0]?.code ?? "",
+      creditAccount: creditLine?.account ?? accounts[1]?.code ?? accounts[0]?.code ?? "",
+      debit: debitLine?.amount ?? 0,
+      credit: creditLine?.amount ?? 0,
+    });
+    setActivePage("journal");
+  }
+
+  function cancelEntryEdit() {
+    setEditingEntryId(null);
+    setDraft(blankDraft);
+  }
+
+  async function handleVoidEntry(entry) {
+    setIsSaving(true);
+    try {
+      await voidJournalEntry(entry);
+      setEntries((current) => current.map((item) => (item.id === entry.id ? { ...item, status: "void" } : item)));
+      if (editingEntryId === entry.id) cancelEntryEdit();
+    } catch (error) {
+      setDataStatus("error");
+      setDataError(error?.message ?? "Could not void journal entry.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  function startEditAccount(account) {
+    setEditingAccountCode(account.code);
+    setAccountDraft({
+      code: account.code,
+      nameEn: account.nameEn,
+      nameLao: account.nameLao ?? "",
+      type: account.type,
+      normalSide: account.normalSide,
+      openingDebit: account.openingDebit,
+      openingCredit: account.openingCredit,
+    });
+    setAccountStatus("");
+  }
+
+  function cancelAccountEdit() {
+    setEditingAccountCode(null);
+    setAccountDraft(blankAccount);
+    setAccountStatus("");
+  }
+
+  async function handleSaveAccountDraft() {
+    if (!company?.id) return;
+    if (!accountDraft.code.trim() || !accountDraft.nameEn.trim()) {
+      setAccountStatus("Account code and name are required.");
+      return;
+    }
+
+    const nextAccount = {
+      ...accountDraft,
+      companyId: company.id,
+      code: accountDraft.code.trim(),
+      nameEn: accountDraft.nameEn.trim(),
+    };
+
+    setIsSaving(true);
+    setAccountStatus("");
+    try {
+      await saveAccount(nextAccount);
+      setAccounts((current) => {
+        const withoutAccount = current.filter((account) => account.code !== nextAccount.code);
+        return [...withoutAccount, nextAccount].sort((a, b) => a.code.localeCompare(b.code));
+      });
+      setEditingAccountCode(null);
+      setAccountDraft(blankAccount);
+      setAccountStatus("Account saved.");
+    } catch (error) {
+      setAccountStatus(error?.message ?? "Could not save account.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleDeleteAccountRow(account) {
+    if (!company?.id) return;
+    setIsSaving(true);
+    setAccountStatus("");
+    try {
+      await deleteAccount(company.id, account.code);
+      setAccounts((current) => current.filter((item) => item.code !== account.code));
+      setAccountStatus("Account deleted.");
+      if (editingAccountCode === account.code) cancelAccountEdit();
+    } catch (error) {
+      setAccountStatus(error?.message ?? "Could not delete account. Accounts used by journal lines are protected.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleAddMember() {
+    if (!company?.id) return;
+    if (!inviteDraft.email.trim()) {
+      setTeamStatus("Email is required.");
+      return;
+    }
+
+    setIsSaving(true);
+    setTeamStatus("");
+    try {
+      const invitation = await createCompanyInvitation(company.id, inviteDraft.email.trim(), inviteDraft.role);
+      if (invitation) {
+        setInvitations((current) => {
+          const withoutInvitation = current.filter((item) => item.id !== invitation.id && item.email.toLowerCase() !== invitation.email.toLowerCase());
+          return [invitation, ...withoutInvitation];
+        });
+      }
+      setInviteDraft(blankMemberInvite);
+      setTeamStatus("Invitation saved.");
+    } catch (error) {
+      setTeamStatus(error?.message ?? "Could not add team member.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleChangeMemberRole(member, role) {
+    setIsSaving(true);
+    setTeamStatus("");
+    try {
+      const updatedMember = await updateCompanyMemberRole(member.id, role);
+      if (updatedMember) {
+        setTeamMembers((current) => current.map((item) => (item.id === member.id ? { ...item, role: updatedMember.role } : item)));
+      }
+      if (member.userId === session.user.id) setMemberRole(role);
+      setTeamStatus("Role updated.");
+    } catch (error) {
+      setTeamStatus(error?.message ?? "Could not update role.");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleRemoveMember(member) {
+    setIsSaving(true);
+    setTeamStatus("");
+    try {
+      await removeCompanyMember(member.id);
+      setTeamMembers((current) => current.filter((item) => item.id !== member.id));
+      setTeamStatus("Team member removed.");
+    } catch (error) {
+      setTeamStatus(error?.message ?? "Could not remove team member.");
     } finally {
       setIsSaving(false);
     }
@@ -797,11 +1243,45 @@ function App() {
                 saveDraft={() => commitDraft("review")}
                 postDraft={() => commitDraft("posted")}
                 isSaving={isSaving}
+                canEdit={userCanManageAccounting}
+                editingEntryId={editingEntryId}
+                cancelEdit={cancelEntryEdit}
+                startEditEntry={startEditEntry}
+                voidEntry={handleVoidEntry}
               />
             )}
-            {activePage === "accounts" && <AccountsPage accountRows={accountRows} />}
+            {activePage === "accounts" && (
+              <AccountsPage
+                accountRows={accountRows}
+                accountDraft={accountDraft}
+                setAccountDraft={setAccountDraft}
+                editingAccountCode={editingAccountCode}
+                startEditAccount={startEditAccount}
+                cancelAccountEdit={cancelAccountEdit}
+                saveAccountDraft={handleSaveAccountDraft}
+                deleteAccountRow={handleDeleteAccountRow}
+                accountStatus={accountStatus}
+                canEdit={userCanManageAccounting}
+                isSaving={isSaving}
+              />
+            )}
             {activePage === "trial" && <TrialPage trialRows={trialRows} totals={totals} />}
             {activePage === "reports" && <ReportsPage reports={reports} totals={totals} />}
+            {activePage === "team" && (
+              <TeamPage
+                company={company}
+                teamMembers={teamMembers}
+                invitations={invitations}
+                inviteDraft={inviteDraft}
+                setInviteDraft={setInviteDraft}
+                teamStatus={teamStatus}
+                canEdit={userCanManageTeam}
+                isSaving={isSaving}
+                addMember={handleAddMember}
+                changeMemberRole={handleChangeMemberRole}
+                removeMember={handleRemoveMember}
+              />
+            )}
           </>
         )}
       </section>
